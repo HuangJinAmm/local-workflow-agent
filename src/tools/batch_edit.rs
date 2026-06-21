@@ -1,0 +1,261 @@
+// BatchEdit tool: apply multiple file edits atomically.
+//
+// All edits are validated before any change is written.  If any pre-check
+// fails the tool returns an error and leaves every file untouched.  If a write
+// fails after some files have already been written, the tool attempts to
+// restore those files from in-memory backups.
+
+use crate::{PermissionLevel, Tool, ToolContext, ToolResult};
+use async_trait::async_trait;
+use serde::Deserialize;
+use serde_json::{json, Value};
+use std::collections::HashMap;
+use tracing::debug;
+
+pub struct BatchEditTool;
+
+#[derive(Debug, Deserialize)]
+struct SingleEdit {
+    file_path: String,
+    old_string: String,
+    new_string: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct BatchEditInput {
+    edits: Vec<SingleEdit>,
+    #[serde(default)]
+    description: Option<String>,
+}
+
+#[async_trait]
+impl Tool for BatchEditTool {
+    fn name(&self) -> &str {
+        crate::core::constants::TOOL_NAME_BATCH_EDIT
+    }
+
+    fn description(&self) -> &str {
+        "Apply multiple file edits atomically. All edits are validated before any \
+         file is modified. If any edit would fail (old_string not found or not \
+         unique) the entire batch is rejected with no changes made. If a write \
+         fails mid-batch, already-written files are rolled back."
+    }
+
+    fn permission_level(&self) -> PermissionLevel {
+        PermissionLevel::Write
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "edits": {
+                    "type": "array",
+                    "description": "List of edits to apply atomically",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "file_path": {
+                                "type": "string",
+                                "description": "Absolute path to the file to modify"
+                            },
+                            "old_string": {
+                                "type": "string",
+                                "description": "Text to replace (must occur exactly once in the file)"
+                            },
+                            "new_string": {
+                                "type": "string",
+                                "description": "Replacement text"
+                            }
+                        },
+                        "required": ["file_path", "old_string", "new_string"]
+                    }
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Optional human-readable description of what this batch edit does"
+                }
+            },
+            "required": ["edits"]
+        })
+    }
+
+    async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
+        let params: BatchEditInput = match serde_json::from_value(input) {
+            Ok(p) => p,
+            Err(e) => return ToolResult::error(format!("Invalid input: {}", e)),
+        };
+
+        if params.edits.is_empty() {
+            return ToolResult::error("edits array must not be empty".to_string());
+        }
+
+        // Permission check (one check covers the whole batch).
+        let description = params.description.as_deref().unwrap_or("batch file edits");
+        if let Err(e) =
+            ctx.check_permission(self.name(), &format!("BatchEdit: {}", description), false)
+        {
+            return ToolResult::error(e.to_string());
+        }
+
+        // ----------------------------------------------------------------
+        // Phase 1: read all files and validate every edit before writing
+        // ----------------------------------------------------------------
+
+        // (resolved_path_string, original_content, new_content)
+        let mut prepared: Vec<(String, String, String)> = Vec::with_capacity(params.edits.len());
+        let mut pre_check_errors: Vec<String> = Vec::new();
+        let mut path_content: HashMap<String, String> = HashMap::new();
+
+        for (i, edit) in params.edits.iter().enumerate() {
+            let path = ctx.resolve_path(&edit.file_path);
+            debug!(path = %path.display(), index = i, "BatchEdit pre-check");
+
+            if edit.old_string.is_empty() {
+                pre_check_errors.push(format!("Edit {}: old_string must not be empty", i));
+                continue;
+            }
+
+            let original = if let Some(content) = path_content.get(&path.display().to_string()) {
+                // use cached edited content if available
+                content.clone()
+            } else {
+                match tokio::fs::read_to_string(&path).await {
+                    Ok(c) => c,
+                    Err(e) => {
+                        pre_check_errors.push(format!(
+                            "Edit {}: cannot read {}: {}",
+                            i,
+                            path.display(),
+                            e
+                        ));
+                        continue;
+                    }
+                }
+            };
+
+            // Normalize Windows CRLF line endings so matching behavior is stable
+            let content = original.replace("\r\n", "\n");
+            let old_string = edit.old_string.replace("\r\n", "\n");
+            let new_string = edit.new_string.replace("\r\n", "\n");
+
+            let count = content.matches(&old_string).count();
+            if count == 0 {
+                pre_check_errors.push(format!(
+                    "Edit {}: old_string not found in {}",
+                    i,
+                    path.display()
+                ));
+                continue;
+            }
+            if count > 1 {
+                pre_check_errors.push(format!(
+                    "Edit {}: old_string appears {} times in {} (must be unique)",
+                    i,
+                    count,
+                    path.display()
+                ));
+                continue;
+            }
+
+            let new_content = content.replacen(&old_string, &new_string, 1);
+            prepared.push((path.display().to_string(), original, new_content.clone()));
+            // update path_content so future edits see the new content
+            path_content.insert(path.display().to_string(), new_content);
+        }
+
+        if !pre_check_errors.is_empty() {
+            return ToolResult::error(format!(
+                "BatchEdit aborted — {} validation error(s):\n{}",
+                pre_check_errors.len(),
+                pre_check_errors.join("\n")
+            ));
+        }
+
+        let edit_count = prepared.len();
+        let unique_files: std::collections::HashSet<&str> =
+            prepared.iter().map(|(p, _, _)| p.as_str()).collect();
+        let file_count = unique_files.len();
+
+        // ----------------------------------------------------------------
+        // Phase 2: write all files; roll back on any failure
+        // ----------------------------------------------------------------
+
+        // merge file writes into a single transaction
+        let mut by_file_writing: HashMap<String, (String, String)> = HashMap::new();
+        for (path_str, original, new_content) in prepared.into_iter() {
+            by_file_writing
+                .entry(path_str.clone())
+                .and_modify(|v| v.1 = new_content.clone()) // only update new_content
+                .or_insert((original, new_content));
+        }
+        let unique_writings = by_file_writing
+            .into_iter()
+            .map(|(path_str, (original, new_content))| (path_str, original, new_content))
+            .collect::<Vec<_>>();
+
+        for (i, (path_str, original, new_content)) in unique_writings.iter().enumerate() {
+            let path = std::path::Path::new(path_str);
+            match tokio::fs::write(path, new_content).await {
+                Ok(()) => {
+                    ctx.record_file_change(
+                        path.to_path_buf(),
+                        original.as_bytes(),
+                        new_content.as_bytes(),
+                        self.name(),
+                    );
+                }
+                Err(e) => {
+                    // Attempt rollback of already-written files.
+                    let mut rollback_errors: Vec<String> = Vec::new();
+
+                    // rollback in reverse order to preserve original file state
+                    for (rb_path, rb_original, rb_new_content) in unique_writings[0..i].iter().rev()
+                    {
+                        if let Err(re) = tokio::fs::write(rb_path, rb_original).await {
+                            rollback_errors.push(format!("  rollback {}: {}", rb_path, re));
+                        } else {
+                            let rb_path = std::path::Path::new(rb_path);
+                            ctx.record_file_change(
+                                rb_path.to_path_buf(),
+                                rb_new_content.as_bytes(),
+                                rb_original.as_bytes(),
+                                self.name(),
+                            );
+                        }
+                    }
+
+                    let mut msg = format!(
+                        "BatchEdit failed while writing {} ({}). Rolled back {} file(s).",
+                        path_str, e, i
+                    );
+                    if !rollback_errors.is_empty() {
+                        msg.push_str(&format!(
+                            "\nRollback errors:\n{}",
+                            rollback_errors.join("\n")
+                        ));
+                    }
+                    return ToolResult::error(msg);
+                }
+            }
+        }
+
+        // ----------------------------------------------------------------
+        // Build success response
+        // ----------------------------------------------------------------
+
+        let summary = format!(
+            "BatchEdit applied {} edit{} across {} file{}.",
+            edit_count,
+            if edit_count != 1 { "s" } else { "" },
+            file_count,
+            if file_count != 1 { "s" } else { "" },
+        );
+
+        ToolResult::success(summary).with_metadata(json!({
+            "edits_applied": edit_count,
+            "files_modified": file_count,
+            "files": unique_writings.iter().map(|(p, _, _)| p).collect::<Vec<_>>(),
+        }))
+    }
+}
