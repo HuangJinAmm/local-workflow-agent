@@ -9032,20 +9032,6 @@ pub fn find_command(name: &str) -> Option<Box<dyn SlashCommand>> {
     })
 }
 
-/// Build `HelpEntry` values for all non-hidden commands, suitable for
-/// populating `HelpOverlay::commands` at startup.
-pub fn build_help_entries() -> Vec<crate::tui::overlays::HelpEntry> {
-    all_commands()
-        .iter()
-        .filter(|c| !c.hidden())
-        .map(|c| crate::tui::overlays::HelpEntry {
-            name: c.name().to_string(),
-            aliases: c.aliases().join(", "),
-            description: c.description().to_string(),
-            category: command_category(c.name()).to_string(),
-        })
-        .collect()
-}
 
 // ---------------------------------------------------------------------------
 // User-defined command templates (Feature 2)
@@ -9150,8 +9136,8 @@ pub async fn execute_command(
     input: &str,
     ctx: &mut CommandContext,
 ) -> Option<CommandResult> {
-    if !crate::tui::input::is_slash_command(input) { return None; }
-    let (name, args) = crate::tui::input::parse_slash_command(input);
+    if !cmd_utils::is_slash_command(input) { return None; }
+    let (name, args) = cmd_utils::parse_slash_command(input);
 
     // First check built-in commands.
     if let Some(cmd) = find_command(name) {
@@ -9191,10 +9177,6 @@ pub async fn execute_command(
     None
 }
 
-// ---------------------------------------------------------------------------
-// Named commands module (top-level `claude <name>` subcommands)
-// ---------------------------------------------------------------------------
-pub mod named_commands;
 
 // ---------------------------------------------------------------------------
 // Stats analytics (persisted transcript aggregation) — backs `claurst stats`.
@@ -9202,6 +9184,9 @@ pub mod named_commands;
 // JSONL transcripts on disk.
 // ---------------------------------------------------------------------------
 pub mod stats;
+
+
+pub mod cmd_utils;
 
 // ---------------------------------------------------------------------------
 // Tests
