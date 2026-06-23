@@ -1,6 +1,6 @@
 // formatter.rs — run a configured file formatter after writes/edits.
 
-use crate::ToolContext;
+use super::ToolContext;
 
 /// Try to format a file using any configured formatter.
 /// Returns silently if no formatter is configured or the formatter fails.

@@ -14,15 +14,15 @@ use crate::core::provider_id::{ModelId, ProviderId};
 use crate::core::types::{ContentBlock, UsageInfo};
 use futures::Stream;
 
-use crate::client::{AnthropicClient, ClientConfig};
-use crate::provider::{LlmProvider, ModelInfo};
-use crate::provider_error::ProviderError;
-use crate::provider_types::{
+use super::super::client::{AnthropicClient, ClientConfig};
+use super::super::provider::{LlmProvider, ModelInfo};
+use super::super::provider_error::ProviderError;
+use super::super::provider_types::{
     ProviderCapabilities, ProviderRequest, ProviderResponse, ProviderStatus, StopReason,
     StreamEvent, SystemPromptStyle,
 };
-use crate::streaming::{AnthropicStreamEvent, ContentDelta, NullStreamHandler};
-use crate::types::{ApiMessage, ApiToolDefinition, CreateMessageRequest};
+use super::super::streaming::{AnthropicStreamEvent, ContentDelta, NullStreamHandler};
+use super::super::types::{ApiMessage, ApiToolDefinition, CreateMessageRequest};
 
 use super::message_normalization::normalize_anthropic_messages;
 

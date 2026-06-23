@@ -10,7 +10,7 @@
 //  Windows → falls back to the existing cmd.exe approach; ConPTY is available
 //             in portable_pty but adds complexity for minimal gain on Windows.
 
-use crate::{PermissionLevel, Tool, ToolContext, ToolResult, session_shell_state};
+use super::{PermissionLevel, Tool, ToolContext, ToolResult, session_shell_state};
 use async_trait::async_trait;
 use crate::core::bash_classifier::{BashRiskLevel, classify_bash_command};
 use crate::core::tasks::{BackgroundTask, global_registry};
@@ -25,7 +25,7 @@ use tracing::debug;
 
 // Unix-only imports used by the shell-state helpers and PTY execution path.
 #[cfg(unix)]
-use crate::ShellState;
+use super::ShellState;
 #[cfg(unix)]
 use regex::Regex;
 #[cfg(unix)]

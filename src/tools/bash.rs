@@ -1,7 +1,7 @@
 // Bash tool: execute shell commands with timeout, streaming output, and
 // persistent shell state (cwd + env) across invocations.
 
-use crate::{PermissionLevel, ShellState, Tool, ToolContext, ToolResult, session_shell_state};
+use super::{PermissionLevel, ShellState, Tool, ToolContext, ToolResult, session_shell_state};
 use async_trait::async_trait;
 use crate::core::bash_classifier::{BashRiskLevel, classify_bash_command};
 use crate::core::tasks::{BackgroundTask, global_registry};
@@ -150,7 +150,7 @@ async fn run_in_background(
     cwd: PathBuf,
     timeout_ms: u64,
     notify_on_complete: bool,
-    completion_notifier: Option<crate::CompletionNotifier>,
+    completion_notifier: Option<super::CompletionNotifier>,
 ) -> ToolResult {
     let task_name = format!("bg: {}", &command[..command.len().min(60)]);
     let mut task = BackgroundTask::new(&task_name);
@@ -568,7 +568,7 @@ impl BashTool {
         &self,
         command: &str,
         ctx: &ToolContext,
-        shell_state_arc: &std::sync::Arc<parking_lot::Mutex<crate::ShellState>>,
+        shell_state_arc: &std::sync::Arc<parking_lot::Mutex<super::ShellState>>,
         timeout_dur: Duration,
         timeout_ms: u64,
     ) -> ToolResult {

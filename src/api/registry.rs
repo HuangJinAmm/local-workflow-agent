@@ -8,12 +8,11 @@ use std::sync::Arc;
 
 use crate::core::ProviderId;
 
-use crate::client::ClientConfig;
-use crate::provider::LlmProvider;
-use crate::provider_types::ProviderStatus;
-use crate::providers::{
-    AnthropicProvider, AzureProvider, BedrockProvider, CodexProvider, CohereProvider,
-    CopilotProvider, FreeEntry, FreeProvider, FREE_CATALOG, GoogleProvider, MinimaxProvider,
+use super::client::ClientConfig;
+use super::provider::LlmProvider;
+use super::provider_types::ProviderStatus;
+use super::providers::{
+    AnthropicProvider,
     OpenAiProvider,
 };
 
@@ -42,7 +41,7 @@ pub fn resolve_provider_api_base(
     let base = config.resolve_provider_api_base(provider_id)?;
     if provider_id == "openai" {
         Some(normalize_openai_base(&base))
-    } else if crate::providers::openai_compat_providers::provider_for_id(provider_id).is_some() {
+    } else if super::providers::openai_compat_providers::provider_for_id(provider_id).is_some() {
         Some(normalize_openai_compat_base(&base))
     } else {
         Some(base)
@@ -57,7 +56,7 @@ pub struct ProviderRegistry {
 }
 
 fn provider_from_key(provider_id: &str, key: String) -> Option<Arc<dyn LlmProvider>> {
-    use crate::providers::openai_compat_providers as p;
+    use super::providers::openai_compat_providers as p;
 
     if let Some(provider) = p::provider_for_id(provider_id) {
         return Some(Arc::new(provider.with_api_key(key)));
@@ -67,67 +66,10 @@ fn provider_from_key(provider_id: &str, key: String) -> Option<Arc<dyn LlmProvid
         "anthropic" => Some(Arc::new(AnthropicProvider::from_config(
             ClientConfig { api_key: key, ..Default::default() },
         ))),
-        "minimax" => Some(Arc::new(MinimaxProvider::new(key))),
         "openai" => Some(Arc::new(OpenAiProvider::new(key))),
-        "google" => Some(Arc::new(GoogleProvider::new(key))),
-        "github-copilot" => Some(Arc::new(CopilotProvider::new(key))),
-        "codex" | "openai-codex" => {
-            // The Codex provider is OAuth-based; the `key` field is not used.
-            // Load from the stored token file instead.
-            CodexProvider::from_stored().map(|p| Arc::new(p) as Arc<dyn LlmProvider>)
-        }
-        "cohere" => Some(Arc::new(CohereProvider::new(key))),
         "custom-openai" => Some(Arc::new(p::custom_openai().with_api_key(key))),
-        // "free" needs two keys (Zen + OpenRouter) — single-key path doesn't
-        // apply.  The auth-store-aware path `runtime_provider_for` handles it.
-        "free" => build_free_provider(),
         _ => None,
     }
-}
-
-/// Build a [`FreeProvider`] by walking [`FREE_CATALOG`] and pulling any keys
-/// the user has stored in the auth store. Each catalog entry whose upstream
-/// has a key becomes one link in the fallback chain.
-///
-/// Returns `None` only if *no* catalog entry has a configured key — a single
-/// key is enough to run, and more is better.
-pub fn build_free_provider() -> Option<Arc<dyn LlmProvider>> {
-    let auth_store = crate::core::AuthStore::load();
-    let mut chain: Vec<FreeEntry> = Vec::new();
-
-    for upstream in FREE_CATALOG {
-        let key = match upstream.id {
-            // OpenCode Zen and Go share `OPENCODE_API_KEY`; accept either slot.
-            "opencode-zen" => auth_store
-                .api_key_for(crate::core::ProviderId::OPENCODE_ZEN)
-                .or_else(|| auth_store.api_key_for(crate::core::ProviderId::OPENCODE_GO)),
-            other => auth_store.api_key_for(other),
-        }
-        .filter(|k| !k.trim().is_empty());
-
-        let Some(key) = key else {
-            continue;
-        };
-
-        let provider: Option<Arc<dyn LlmProvider>> = match upstream.id {
-            "google" => Some(Arc::new(GoogleProvider::new(key))),
-            "cohere" => Some(Arc::new(CohereProvider::new(key))),
-            id => crate::providers::openai_compat_providers::provider_for_id(id)
-                .map(|p| Arc::new(p.with_api_key(key)) as Arc<dyn LlmProvider>),
-        };
-
-        if let Some(provider) = provider {
-            chain.push(FreeEntry {
-                upstream: *upstream,
-                provider,
-            });
-        }
-    }
-
-    if chain.is_empty() {
-        return None;
-    }
-    Some(Arc::new(FreeProvider::new(chain)) as Arc<dyn LlmProvider>)
 }
 
 pub fn provider_from_config(
@@ -142,42 +84,16 @@ pub fn provider_from_config(
     let api_key = config.resolve_provider_api_key(provider_id);
     let api_base = resolve_provider_api_base(config, provider_id).filter(|base| !base.is_empty());
 
-    use crate::providers;
+    use super::providers;
 
     match provider_id {
         "anthropic" => None,
-        // Composite "Free" provider — two keys are pulled internally from the
-        // auth store; the `api_key` resolved above is ignored.
-        "free" => build_free_provider(),
         "openai" => {
             let mut provider = OpenAiProvider::new(api_key.unwrap_or_default());
             if let Some(base) = api_base {
                 provider = provider.with_base_url(base);
             }
             Some(Arc::new(provider))
-        }
-        "google" => api_key.map(|key| Arc::new(GoogleProvider::new(key)) as Arc<dyn LlmProvider>),
-        "minimax" => {
-            api_key.map(|key| Arc::new(MinimaxProvider::new(key)) as Arc<dyn LlmProvider>)
-        }
-        "azure" => {
-            let resource_name = provider_cfg
-                .and_then(|provider| provider.options.get("resource_name"))
-                .and_then(|value| value.as_str())
-                .filter(|value| !value.is_empty())
-                .map(str::to_owned)
-                .or_else(|| {
-                    std::env::var("AZURE_RESOURCE_NAME")
-                        .ok()
-                        .filter(|value| !value.is_empty())
-                });
-
-            match (resource_name, api_key) {
-                (Some(resource_name), Some(key)) => Some(
-                    Arc::new(AzureProvider::new(resource_name, key)) as Arc<dyn LlmProvider>
-                ),
-                _ => None,
-            }
         }
         "ollama" => {
             let mut provider = providers::ollama();
@@ -240,19 +156,12 @@ pub fn provider_from_config(
             }
             Some(Arc::new(provider))
         }
-        "cohere" => api_key.map(|key| Arc::new(CohereProvider::new(key)) as Arc<dyn LlmProvider>),
-        "github-copilot" => {
-            api_key.map(|key| Arc::new(CopilotProvider::new(key)) as Arc<dyn LlmProvider>)
-        }
-        "codex" | "openai-codex" => {
-            CodexProvider::from_stored().map(|provider| Arc::new(provider) as Arc<dyn LlmProvider>)
-        }
         _ => api_key.and_then(|key| provider_from_key(provider_id, key)),
     }
 }
 
 pub fn runtime_provider_for(provider_id: &str) -> Option<Arc<dyn LlmProvider>> {
-    use crate::providers::openai_compat_providers as p;
+    use super::providers::openai_compat_providers as p;
 
     // Local providers never require an API key — build them directly so that
     // the auth-store bypass below doesn't silently drop them.
@@ -264,13 +173,6 @@ pub fn runtime_provider_for(provider_id: &str) -> Option<Arc<dyn LlmProvider>> {
         "lmstudio" | "lm-studio" => return Some(Arc::new(p::lm_studio())),
         // "llama-server" is the binary name for the modern llama.cpp server.
         "llamacpp" | "llama-cpp" | "llama-server" => return Some(Arc::new(p::llama_cpp())),
-        "codex" | "openai-codex" => {
-            return CodexProvider::from_stored().map(|p| Arc::new(p) as Arc<dyn LlmProvider>);
-        }
-        // "free" pulls two keys (Zen + OpenRouter) from the auth store and
-        // wraps them in a fallback composite — handled here so the generic
-        // single-key path below doesn't short-circuit on a missing key.
-        "free" => return build_free_provider(),
         _ => {}
     }
 
@@ -390,71 +292,12 @@ impl ProviderRegistry {
         registry
     }
 
-    /// Register [`GoogleProvider`] if `GOOGLE_API_KEY` or
-    /// `GOOGLE_GENERATIVE_AI_API_KEY` is set in the environment.
-    /// Returns `&mut self` for builder chaining.
-    pub fn with_google_if_key_set(&mut self) -> &mut Self {
-        let key = std::env::var("GOOGLE_API_KEY")
-            .or_else(|_| std::env::var("GOOGLE_GENERATIVE_AI_API_KEY"));
-        if let Ok(key) = key {
-            let provider = Arc::new(GoogleProvider::new(key));
-            self.register(provider);
-        }
-        self
-    }
-
     /// Register [`OpenAiProvider`] if `OPENAI_API_KEY` is set in the
     /// environment.  Returns `&mut self` for builder chaining.
     pub fn with_openai_if_key_set(&mut self) -> &mut Self {
         if let Ok(key) = std::env::var("OPENAI_API_KEY") {
             let provider = Arc::new(OpenAiProvider::new(key));
             self.register(provider);
-        }
-        self
-    }
-
-    /// Register [`AzureProvider`] if `AZURE_API_KEY` and `AZURE_RESOURCE_NAME`
-    /// are set in the environment.  Returns `&mut self` for builder chaining.
-    pub fn with_azure_if_configured(&mut self) -> &mut Self {
-        if let Some(p) = AzureProvider::from_env() {
-            self.register(Arc::new(p));
-        }
-        self
-    }
-
-    /// Register [`BedrockProvider`] if AWS credentials are available in the
-    /// environment (`AWS_ACCESS_KEY_ID`+`AWS_SECRET_ACCESS_KEY` or
-    /// `AWS_BEARER_TOKEN_BEDROCK`).  Returns `&mut self` for builder chaining.
-    pub fn with_bedrock_if_configured(&mut self) -> &mut Self {
-        if let Some(p) = BedrockProvider::from_env() {
-            self.register(Arc::new(p));
-        }
-        self
-    }
-
-    /// Register [`CopilotProvider`] if `GITHUB_TOKEN` is set in the environment.
-    /// Returns `&mut self` for builder chaining.
-    pub fn with_copilot_if_configured(&mut self) -> &mut Self {
-        if let Some(p) = CopilotProvider::from_env() {
-            self.register(Arc::new(p));
-        }
-        self
-    }
-
-    /// Register [`CodexProvider`] if stored Codex OAuth tokens are available in
-    /// `~/.claurst/codex_tokens.json`.  Returns `&mut self` for builder chaining.
-    pub fn with_codex_if_configured(&mut self) -> &mut Self {
-        if let Some(p) = CodexProvider::from_stored() {
-            self.register(Arc::new(p));
-        }
-        self
-    }
-
-    /// Register [`CohereProvider`] if `COHERE_API_KEY` is set in the environment.
-    /// Returns `&mut self` for builder chaining.
-    pub fn with_cohere_if_key_set(&mut self) -> &mut Self {
-        if let Some(p) = CohereProvider::from_env() {
-            self.register(Arc::new(p));
         }
         self
     }
@@ -467,12 +310,6 @@ impl ProviderRegistry {
         let mut registry = Self::with_anthropic(anthropic_config);
         registry
             .with_openai_if_key_set()
-            .with_google_if_key_set()
-            .with_azure_if_configured()
-            .with_bedrock_if_configured()
-            .with_copilot_if_configured()
-            .with_codex_if_configured()
-            .with_cohere_if_key_set()
             .with_available_providers();
         registry
     }
@@ -526,7 +363,7 @@ impl ProviderRegistry {
     ///
     /// Returns `&mut self` for builder chaining.
     pub fn with_available_providers(&mut self) -> &mut Self {
-        use crate::providers::openai_compat_providers as p;
+        use super::providers::openai_compat_providers as p;
 
         // Local providers — always try to register.
         self.register(Arc::new(p::ollama()));
@@ -573,10 +410,6 @@ impl ProviderRegistry {
         if std::env::var("HF_TOKEN").map(|v| !v.is_empty()).unwrap_or(false) {
             self.register(Arc::new(p::huggingface()));
         }
-        if std::env::var("MINIMAX_API_KEY").map(|v| !v.is_empty()).unwrap_or(false) {
-            let key = std::env::var("MINIMAX_API_KEY").unwrap_or_default();
-            self.register(Arc::new(MinimaxProvider::new(key)));
-        }
         if std::env::var("NVIDIA_API_KEY").map(|v| !v.is_empty()).unwrap_or(false) {
             self.register(Arc::new(p::nvidia()));
         }
@@ -621,9 +454,6 @@ impl ProviderRegistry {
         }
         if std::env::var("FIREWORKS_API_KEY").map(|v| !v.is_empty()).unwrap_or(false) {
             self.register(Arc::new(p::fireworks()));
-        }
-        if std::env::var("OPENCODE_API_KEY").map(|v| !v.is_empty()).unwrap_or(false) {
-            self.register(Arc::new(p::opencode_go()));
         }
         self
     }

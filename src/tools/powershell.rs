@@ -13,7 +13,7 @@
 //   Medium   → requires approval only when ctx.require_confirmation is set
 //   Low      → executes directly
 
-use crate::{PermissionLevel, Tool, ToolContext, ToolResult};
+use super::{PermissionLevel, Tool, ToolContext, ToolResult};
 use async_trait::async_trait;
 use crate::core::ps_classifier::{PsRiskLevel, classify_ps_command};
 use serde::Deserialize;

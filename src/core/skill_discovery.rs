@@ -138,7 +138,7 @@ fn scan_dir(dir: &Path) -> Vec<DiscoveredSkill> {
 /// duplicates from lower-priority sources are warned via `tracing::warn`).
 pub fn discover_skills(
     cwd: &Path,
-    config_skills: &crate::config::SkillsConfig,
+    config_skills: &crate::core::config::SkillsConfig,
 ) -> HashMap<String, DiscoveredSkill> {
     let mut all: HashMap<String, DiscoveredSkill> = HashMap::new();
     let mut warn_duplicates: Vec<String> = Vec::new();

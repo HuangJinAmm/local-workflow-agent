@@ -5,7 +5,7 @@
 // fails after some files have already been written, the tool attempts to
 // restore those files from in-memory backups.
 
-use crate::{PermissionLevel, Tool, ToolContext, ToolResult};
+use super::{PermissionLevel, Tool, ToolContext, ToolResult};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -203,7 +203,8 @@ impl Tool for BatchEditTool {
                         original.as_bytes(),
                         new_content.as_bytes(),
                         self.name(),
-                    );
+                    )
+                    .await;
                 }
                 Err(e) => {
                     // Attempt rollback of already-written files.
@@ -221,7 +222,8 @@ impl Tool for BatchEditTool {
                                 rb_new_content.as_bytes(),
                                 rb_original.as_bytes(),
                                 self.name(),
-                            );
+                            )
+                            .await;
                         }
                     }
 

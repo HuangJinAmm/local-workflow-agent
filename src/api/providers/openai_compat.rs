@@ -14,10 +14,10 @@ use futures::Stream;
 use serde_json::{json, Value};
 use tracing::debug;
 
-use crate::error_handling::parse_error_response;
-use crate::provider::{LlmProvider, ModelInfo};
-use crate::provider_error::ProviderError;
-use crate::provider_types::{
+use super::super::error_handling::parse_error_response;
+use super::super::provider::{LlmProvider, ModelInfo};
+use super::super::provider_error::ProviderError;
+use super::super::provider_types::{
     ProviderCapabilities, ProviderRequest, ProviderResponse, ProviderStatus,
     StreamEvent, SystemPromptStyle,
 };

@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use crate::core::provider_id::ProviderId;
 
-use crate::provider_error::ProviderError;
+use super::provider_error::ProviderError;
 
 // ---------------------------------------------------------------------------
 // Overflow pattern table

@@ -5,7 +5,7 @@
 // - Returns a list of results with title, url, and snippet
 // - Falls back to DuckDuckGo if no search API key is configured
 
-use crate::{PermissionLevel, Tool, ToolContext, ToolResult};
+use super::{PermissionLevel, Tool, ToolContext, ToolResult};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{json, Value};

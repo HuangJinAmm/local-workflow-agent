@@ -1,6 +1,6 @@
 // Grep tool: content search with ripgrep-style options.
 
-use crate::{PermissionLevel, Tool, ToolContext, ToolResult};
+use super::{PermissionLevel, Tool, ToolContext, ToolResult};
 use async_trait::async_trait;
 use regex::RegexBuilder;
 use serde::Deserialize;

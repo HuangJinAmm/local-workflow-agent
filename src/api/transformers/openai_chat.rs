@@ -4,11 +4,11 @@
 // Delegates message/tool conversion to the public helpers exposed by
 // `OpenAiProvider` so that all format logic lives in one place.
 
-use crate::provider::ModelInfo;
-use crate::provider_error::ProviderError;
-use crate::provider_types::{ProviderRequest, ProviderResponse};
-use crate::providers::OpenAiProvider;
-use crate::transform::MessageTransformer;
+use super::super::provider::ModelInfo;
+use super::super::provider_error::ProviderError;
+use super::super::provider_types::{ProviderRequest, ProviderResponse};
+use super::super::providers::OpenAiProvider;
+use super::super::transform::MessageTransformer;
 use crate::core::provider_id::ProviderId;
 
 // ---------------------------------------------------------------------------

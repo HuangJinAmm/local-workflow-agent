@@ -23,8 +23,6 @@ use tracing::{debug, warn};
 // ---------------------------------------------------------------------------
 // Modules
 // ---------------------------------------------------------------------------
-pub mod bun_tls;
-pub mod codex_adapter;
 
 // Provider-agnostic unified types (Phase 1A).
 pub mod provider_types;
@@ -73,8 +71,6 @@ pub use registry::ProviderRegistry;
 
 // Phase 1D re-exports — concrete provider adapters.
 pub use providers::AnthropicProvider;
-pub use providers::GoogleProvider;
-pub use providers::MinimaxProvider;
 pub use providers::OpenAiProvider;
 
 // Phase 3 re-exports — model registry.
@@ -86,23 +82,11 @@ pub use model_registry::{
 // Phase 6 re-exports — provider-aware error handling.
 pub use error_handling::{is_context_overflow, parse_error_response, RetryConfig};
 
-// Phase 2E re-exports — Azure, Bedrock, and GitHub Copilot providers.
-pub use providers::AzureProvider;
-pub use providers::BedrockProvider;
-pub use providers::CopilotProvider;
-
 // Phase 2B re-exports — OpenAI-compatible generic adapter + common factories.
 pub use providers::{
     OpenAiCompatProvider,
     ollama, lm_studio, deepseek, groq, xai, openrouter, mistral, opencode_zen,
 };
-
-// Composite "Free" provider — stacks many free-tier upstreams behind one
-// `free/auto` model id.
-pub use providers::{FreeEntry, FreeProvider, FreeUpstream, FREE_CATALOG};
-
-// Phase 2D re-exports — Cohere native provider.
-pub use providers::CohereProvider;
 
 // Phase 4 re-exports — concrete message transformers.
 pub use transformers::{AnthropicTransformer, OpenAiChatTransformer};
@@ -455,7 +439,7 @@ pub mod client {
 
     /// The main Anthropic API client.
     pub struct AnthropicClient {
-        http: wreq::Client,
+        http: reqwest::Client,
         config: ClientConfig,
         /// Stable per-client session id; the official client reuses one id for
         /// the whole session, in both the header and `metadata.user_id`.
@@ -506,79 +490,16 @@ pub mod client {
             String::new()
         }
 
-        /// Make an OAuth request look like Claude Code: prepend the
-        /// `x-anthropic-billing-header` block (`system[0]`) then the
-        /// `"You are Claude Code…"` identity block (`system[1]`), and strip
-        /// Claurst's own attribution so the official identity is the only one the
-        /// server sees. No-op for API-key auth.
-        fn apply_oauth_stealth(&self, request: &mut CreateMessageRequest) {
-            if !self.config.use_bearer_auth {
-                return;
-            }
-
-            let first_user_text = Self::first_user_message_text(&request.messages);
-            let text_block = |text: String| SystemBlock {
-                block_type: "text".to_string(),
-                text,
-                cache_control: None,
-            };
-            let billing_block =
-                text_block(crate::core::oauth_config::claude_code_billing_header(&first_user_text));
-            let identity_block =
-                text_block(crate::core::oauth_config::CLAUDE_CODE_SYSTEM_PROMPT_PREFIX.to_string());
-
-            // Drop a leading "You are Claurst…" / "You are a Claude agent…" line:
-            // the injected official identity must be the only one the server sees.
-            let strip_attr = |text: &str| -> String {
-                let t = text.trim_start();
-                if t.starts_with("You are Claurst") || t.starts_with("You are a Claude agent") {
-                    if let Some(i) = t.find("\n\n") {
-                        return t[i + 2..].to_string();
-                    }
-                    if let Some(i) = t.find('\n') {
-                        return t[i + 1..].to_string();
-                    }
-                    return String::new();
-                }
-                text.to_string()
-            };
-
-            request.system = match request.system.take() {
-                None => Some(SystemPrompt::Blocks(vec![billing_block, identity_block])),
-                Some(SystemPrompt::Text(existing)) => {
-                    let mut blocks = vec![billing_block, identity_block];
-                    let stripped = strip_attr(&existing);
-                    if !stripped.is_empty() {
-                        blocks.push(text_block(stripped));
-                    }
-                    Some(SystemPrompt::Blocks(blocks))
-                }
-                Some(SystemPrompt::Blocks(mut blocks)) => {
-                    let has_billing = blocks
-                        .first()
-                        .is_some_and(|b| b.text.starts_with("x-anthropic-billing-header:"));
-                    if !has_billing {
-                        if let Some(first) = blocks.first_mut() {
-                            first.text = strip_attr(&first.text);
-                        }
-                        let has_identity = blocks.first().is_some_and(|b| {
-                            b.text == crate::core::oauth_config::CLAUDE_CODE_SYSTEM_PROMPT_PREFIX
-                        });
-                        if !has_identity {
-                            blocks.insert(0, identity_block);
-                        }
-                        blocks.insert(0, billing_block);
-                    }
-                    Some(SystemPrompt::Blocks(blocks))
-                }
-            };
+        /// OAuth stealth injection (removed — oauth_config module was deleted).
+        fn apply_oauth_stealth(&self, _request: &mut CreateMessageRequest) {
+            // No-op: oauth_config module was deleted during cleanup.
         }
 
-        /// Build a new client. Uses a `wreq`/BoringSSL client whose TLS
-        /// fingerprint matches Bun (the official client). An empty key is
-        /// allowed; validation is deferred to the first call.
+        /// Build a new client.
         pub fn new(config: ClientConfig) -> anyhow::Result<Self> {
-            let http = crate::bun_tls::build_anthropic_client(config.request_timeout)?;
+            let http = reqwest::Client::builder()
+                .timeout(config.request_timeout)
+                .build()?;
             Ok(Self {
                 http,
                 config,
@@ -609,7 +530,7 @@ pub mod client {
         ) -> Result<CreateMessageResponse, ClaudeError> {
             // Deferred key validation — fail here rather than at construction
             // so that non-Anthropic provider setups don't crash on startup.
-            if self.config.api_key.is_empty() && self.config.provider != Provider::Codex {
+            if self.config.api_key.is_empty() {
                 // Check if this model might belong to another provider, giving
                 // the user a more actionable error message.
                 let model = &request.model;
@@ -656,10 +577,6 @@ pub mod client {
                     format!("No API key for the selected model. {}", hint)
                 ));
             }
-            // Route to Codex if configured
-            if self.config.provider == Provider::Codex {
-                return self.create_message_codex(&request).await;
-            }
 
             request.stream = false;
             self.apply_oauth_stealth(&mut request);
@@ -676,49 +593,6 @@ pub mod client {
             serde_json::from_str(&text).map_err(ClaudeError::Json)
         }
 
-        /// Send a request to OpenAI Codex API instead of Anthropic.
-        async fn create_message_codex(
-            &self,
-            request: &CreateMessageRequest,
-        ) -> Result<CreateMessageResponse, ClaudeError> {
-            // Convert Anthropic format to OpenAI format
-            let openai_req = codex_adapter::anthropic_to_openai_request(request);
-
-            // Send to Codex endpoint
-            let client = reqwest::Client::new();
-            let resp = client
-                .post(codex_adapter::CODEX_RESPONSES_ENDPOINT)
-                .header("Authorization", format!("Bearer {}", self.config.api_key))
-                .header("Content-Type", "application/json")
-                .json(&openai_req)
-                .timeout(self.config.request_timeout)
-                .send()
-                .await
-                .map_err(|e| ClaudeError::Other(format!("Codex request failed: {}", e)))?;
-
-            let status = resp.status();
-            let text = resp.text().await.map_err(|e| ClaudeError::Api(format!("HTTP error: {e}")))?;
-
-            if !status.is_success() {
-                return Err(self.parse_api_error(status.as_u16(), &text));
-            }
-
-            // Parse OpenAI response and convert to Anthropic format
-            let openai_resp: Value = serde_json::from_str(&text).map_err(ClaudeError::Json)?;
-            let (content, stop_reason, input_tokens, output_tokens) =
-                codex_adapter::parse_openai_response(&openai_resp);
-
-            let response = codex_adapter::build_anthropic_response(
-                &content,
-                &stop_reason,
-                input_tokens,
-                output_tokens,
-                &request.model,
-            );
-
-            Ok(response)
-        }
-
         // ---- Streaming create message ------------------------------------
 
         /// Send a streaming `POST /v1/messages`.  Events are dispatched to the
@@ -730,7 +604,7 @@ pub mod client {
             handler: Arc<dyn StreamHandler>,
         ) -> Result<mpsc::Receiver<streaming::AnthropicStreamEvent>, ClaudeError> {
             // Deferred key validation
-            if self.config.api_key.is_empty() && self.config.provider != Provider::Codex {
+            if self.config.api_key.is_empty() {
                 let model = &request.model;
                 let hint = if model.starts_with("gemini") || model.starts_with("gemma") {
                     format!(
@@ -758,12 +632,6 @@ pub mod client {
                 };
                 return Err(ClaudeError::Auth(
                     format!("No API key for the selected model. {}", hint)
-                ));
-            }
-            // Codex provider doesn't support streaming yet
-            if self.config.provider == Provider::Codex {
-                return Err(ClaudeError::Other(
-                    "Codex provider does not support streaming yet".to_string(),
                 ));
             }
 
@@ -804,7 +672,7 @@ pub mod client {
         /// Falls back gracefully: returns an empty `Vec` on any error so
         /// callers can fall back to the hardcoded default list instead of
         /// surfacing an error.
-        pub async fn fetch_available_models(&self) -> anyhow::Result<Vec<crate::AvailableModel>> {
+        pub async fn fetch_available_models(&self) -> anyhow::Result<Vec<super::AvailableModel>> {
             let url = format!("{}/v1/models", self.config.api_base);
 
             let mut req = self
@@ -816,11 +684,11 @@ pub mod client {
                 req = req
                     .header(
                         "anthropic-beta",
-                        crate::core::oauth_config::OAUTH_BETA_FLAGS.join(","),
+                        "",
                     )
                     .header(
                         "user-agent",
-                        crate::core::oauth_config::claude_code_user_agent(),
+                        "claurst/0.1",
                     )
                     .header("x-app", "cli")
                     .header("Authorization", format!("Bearer {}", &self.config.api_key));
@@ -836,7 +704,7 @@ pub mod client {
 
             #[derive(serde::Deserialize)]
             struct ModelsResponse {
-                data: Vec<crate::AvailableModel>,
+                data: Vec<super::AvailableModel>,
             }
 
             let body: ModelsResponse = resp.json().await?;
@@ -849,7 +717,7 @@ pub mod client {
         async fn send_with_retry(
             &self,
             body: &Value,
-        ) -> Result<wreq::Response, ClaudeError> {
+        ) -> Result<reqwest::Response, ClaudeError> {
             let url = format!("{}/v1/messages", self.config.api_base);
             let mut attempts = 0u32;
             let mut delay = self.config.initial_retry_delay;
@@ -919,7 +787,7 @@ pub mod client {
 
             // Account-tier `anthropic-beta` set (Pro vs Max), stable across retries.
             let anthropic_beta = if use_oauth {
-                let mut s = crate::core::oauth_config::oauth_beta_flags(has_premium).join(",");
+                let mut s = String::new();
                 if !self.config.beta_features.is_empty() {
                     if !s.is_empty() {
                         s.push(',');
@@ -964,7 +832,7 @@ pub mod client {
                     req = req
                         .header(
                             "user-agent",
-                            crate::core::oauth_config::claude_code_user_agent(),
+                            "claurst/0.1",
                         )
                         .header("x-app", "cli")
                         .header("anthropic-dangerous-direct-browser-access", "true")
@@ -1049,7 +917,7 @@ pub mod client {
 
         /// Read an SSE byte stream, parse frames, and emit `AnthropicStreamEvent`s.
         async fn process_sse_stream(
-            resp: wreq::Response,
+            resp: reqwest::Response,
             handler: Arc<dyn StreamHandler>,
             tx: mpsc::Sender<streaming::AnthropicStreamEvent>,
         ) -> Result<(), ClaudeError> {

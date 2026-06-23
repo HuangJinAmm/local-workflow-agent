@@ -10,7 +10,7 @@ use serde_json::Value;
 
 // Re-export ThinkingConfig and SystemPrompt from the api types module so
 // callers only need to import from this module.
-pub use crate::types::{ThinkingConfig, SystemPrompt};
+pub use super::types::{ThinkingConfig, SystemPrompt};
 
 // ---------------------------------------------------------------------------
 // StopReason

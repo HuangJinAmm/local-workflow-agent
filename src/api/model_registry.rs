@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::provider_id::{ModelId, ProviderId};
 
-use crate::provider::ModelInfo;
+use super::provider::ModelInfo;
 
 // ---------------------------------------------------------------------------
 // Embedded snapshot

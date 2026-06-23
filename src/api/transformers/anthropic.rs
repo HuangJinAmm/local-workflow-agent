@@ -5,12 +5,12 @@
 // `to_provider` serialises the request fields directly to the Anthropic v1
 // messages schema and `from_provider` parses the standard Anthropic response.
 
-use crate::provider::ModelInfo;
-use crate::provider_error::ProviderError;
-use crate::provider_types::{ProviderRequest, ProviderResponse, StopReason};
-use crate::transform::MessageTransformer;
-use crate::types::{ApiMessage, ApiToolDefinition};
-use crate::providers::message_normalization::normalize_anthropic_messages;
+use super::super::provider::ModelInfo;
+use super::super::provider_error::ProviderError;
+use super::super::provider_types::{ProviderRequest, ProviderResponse, StopReason};
+use super::super::transform::MessageTransformer;
+use super::super::types::{ApiMessage, ApiToolDefinition};
+use super::super::providers::message_normalization::normalize_anthropic_messages;
 use crate::core::provider_id::ProviderId;
 use crate::core::types::{ContentBlock, UsageInfo};
 
@@ -63,7 +63,7 @@ impl MessageTransformer for AnthropicTransformer {
 
         // System prompt — Anthropic uses a top-level `system` field.
         if let Some(sys) = &request.system_prompt {
-            use crate::provider_types::SystemPrompt;
+            use super::super::provider_types::SystemPrompt;
             let sys_text = match sys {
                 SystemPrompt::Text(t) => t.clone(),
                 SystemPrompt::Blocks(blocks) => blocks

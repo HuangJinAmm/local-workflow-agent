@@ -18,11 +18,6 @@ use std::sync::Arc;
 pub mod ask_user;
 pub mod bash;
 pub mod pty_bash;
-pub mod brief;
-pub mod config_tool;
-pub mod cron;
-pub mod enter_plan_mode;
-pub mod exit_plan_mode;
 pub mod apply_patch;
 pub mod batch_edit;
 pub mod file_edit;
@@ -30,40 +25,20 @@ pub mod file_read;
 pub mod file_write;
 pub mod glob_tool;
 pub mod grep_tool;
-pub mod lsp_tool;
 pub mod mcp_resources;
 pub mod todo_write;
-pub mod notebook_edit;
 pub mod powershell;
-pub mod send_message;
-pub mod bundled_skills;
 pub mod skill_tool;
-pub mod sleep;
 pub mod tasks;
-pub mod tool_search;
 pub mod web_fetch;
 pub mod web_search;
-pub mod worktree;
-pub mod computer_use;
-pub mod mcp_auth_tool;
-pub mod repl_tool;
-pub mod synthetic_output;
-pub mod team_tool;
-pub mod remote_trigger;
 pub mod formatter;
-pub mod monitor_tool;
-pub mod goal_complete;
 
 // Re-exports for convenience.
 pub use formatter::try_format_file;
 pub use ask_user::AskUserQuestionTool;
 pub use bash::BashTool;
 pub use pty_bash::PtyBashTool;
-pub use brief::BriefTool;
-pub use config_tool::ConfigTool;
-pub use cron::{CronCreateTool, CronDeleteTool, CronListTool};
-pub use enter_plan_mode::EnterPlanModeTool;
-pub use exit_plan_mode::ExitPlanModeTool;
 pub use apply_patch::ApplyPatchTool;
 pub use batch_edit::BatchEditTool;
 pub use file_edit::FileEditTool;
@@ -71,27 +46,13 @@ pub use file_read::FileReadTool;
 pub use file_write::FileWriteTool;
 pub use glob_tool::GlobTool;
 pub use grep_tool::GrepTool;
-pub use lsp_tool::LspTool;
 pub use mcp_resources::{ListMcpResourcesTool, ReadMcpResourceTool};
 pub use todo_write::TodoWriteTool;
-pub use notebook_edit::NotebookEditTool;
 pub use powershell::PowerShellTool;
-pub use send_message::{SendMessageTool, drain_inbox, peek_inbox};
 pub use skill_tool::SkillTool;
-pub use sleep::SleepTool;
 pub use tasks::{TaskCreateTool, TaskGetTool, TaskListTool, TaskOutputTool, TaskStopTool, TaskUpdateTool, Task, TaskStatus, TASK_STORE};
-pub use tool_search::ToolSearchTool;
 pub use web_fetch::WebFetchTool;
 pub use web_search::WebSearchTool;
-pub use worktree::{EnterWorktreeTool, ExitWorktreeTool};
-pub use computer_use::ComputerUseTool;
-pub use mcp_auth_tool::McpAuthTool;
-pub use repl_tool::ReplTool;
-pub use synthetic_output::SyntheticOutputTool;
-pub use team_tool::{TeamCreateTool, TeamDeleteTool, register_agent_runner, AgentRunFn};
-pub use remote_trigger::RemoteTriggerTool;
-pub use monitor_tool::MonitorTool;
-pub use goal_complete::GoalCompleteTool;
 
 // ---------------------------------------------------------------------------
 // AskUser question channel
@@ -219,17 +180,6 @@ pub fn clear_session_shell_state(session_id: &str) {
     SHELL_STATE_REGISTRY.remove(session_id);
 }
 
-/// Return the `ShadowSnapshot` for `working_dir`, creating it on first call.
-/// Returns `None` when git is unavailable or the directory is not in a git repo.
-pub fn session_shadow(working_dir: &std::path::Path) -> Option<Arc<crate::core::snapshot::ShadowSnapshot>> {
-    crate::core::snapshot::get_or_create(working_dir)
-}
-
-/// Drop the cached shadow snapshot for `working_dir` (e.g. when a session ends).
-pub fn clear_session_shadow(working_dir: &std::path::Path) {
-    crate::core::snapshot::remove(working_dir);
-}
-
 /// Write `contents` to `path` atomically: write to a temp file in the same
 /// directory, then rename over the destination. A crash or disk-full mid-write
 /// can never leave the destination truncated or half-written.
@@ -281,7 +231,6 @@ pub struct ToolContext {
     pub permission_handler: Arc<dyn PermissionHandler>,
     pub cost_tracker: Arc<CostTracker>,
     pub session_id: String,
-    pub file_history: Arc<parking_lot::Mutex<crate::core::file_history::FileHistory>>,
     pub current_turn: Arc<AtomicUsize>,
     /// If true, suppress interactive prompts (batch / CI mode).
     pub non_interactive: bool,
@@ -312,6 +261,17 @@ impl ToolContext {
         } else {
             self.working_dir.join(p)
         }
+    }
+
+    /// Record a file change (stub — file history tracking was removed).
+    pub async fn record_file_change(
+        &self,
+        _path: std::path::PathBuf,
+        _before: impl AsRef<[u8]>,
+        _after: impl AsRef<[u8]>,
+        _tool_name: &str,
+    ) {
+        // No-op: file history tracking was removed during cleanup.
     }
 
     fn permission_allowed_roots(&self) -> Vec<PathBuf> {
@@ -475,22 +435,6 @@ impl ToolContext {
     pub fn current_turn_index(&self) -> usize {
         self.current_turn.load(Ordering::Relaxed)
     }
-
-    pub fn record_file_change(
-        &self,
-        path: PathBuf,
-        before_content: &[u8],
-        after_content: &[u8],
-        tool_name: &str,
-    ) {
-        self.file_history.lock().record_modification(
-            path,
-            before_content,
-            after_content,
-            self.current_turn_index(),
-            tool_name,
-        );
-    }
 }
 
 /// The trait every tool must implement.
@@ -534,7 +478,6 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
         Box::new(GrepTool),
         Box::new(WebFetchTool),
         Box::new(WebSearchTool),
-        Box::new(NotebookEditTool),
         Box::new(TaskCreateTool),
         Box::new(TaskGetTool),
         Box::new(TaskUpdateTool),
@@ -543,34 +486,10 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
         Box::new(TaskOutputTool),
         Box::new(TodoWriteTool),
         Box::new(AskUserQuestionTool),
-        Box::new(EnterPlanModeTool),
-        Box::new(ExitPlanModeTool),
         Box::new(PowerShellTool),
-        Box::new(SleepTool),
-        Box::new(CronCreateTool),
-        Box::new(CronDeleteTool),
-        Box::new(CronListTool),
-        Box::new(EnterWorktreeTool),
-        Box::new(ExitWorktreeTool),
+        Box::new(SkillTool),
         Box::new(ListMcpResourcesTool),
         Box::new(ReadMcpResourceTool),
-        Box::new(ToolSearchTool),
-        Box::new(BriefTool),
-        Box::new(ConfigTool),
-        Box::new(SendMessageTool),
-        Box::new(SkillTool),
-        Box::new(LspTool),
-        Box::new(ReplTool),
-        Box::new(TeamCreateTool),
-        Box::new(TeamDeleteTool),
-        Box::new(SyntheticOutputTool),
-        Box::new(McpAuthTool),
-        Box::new(RemoteTriggerTool),
-        Box::new(MonitorTool),
-        Box::new(GoalCompleteTool),
-        // Computer Use is only available when compiled with the feature flag.
-        #[cfg(feature = "computer-use")]
-        Box::new(computer_use::ComputerUseTool),
     ]
 }
 
@@ -620,9 +539,6 @@ mod tests {
             permission_handler: handler,
             cost_tracker: crate::core::cost::CostTracker::new(),
             session_id: "test".to_string(),
-            file_history: Arc::new(parking_lot::Mutex::new(
-                crate::core::file_history::FileHistory::new(),
-            )),
             current_turn: Arc::new(AtomicUsize::new(0)),
             non_interactive: true,
             mcp_manager: None,

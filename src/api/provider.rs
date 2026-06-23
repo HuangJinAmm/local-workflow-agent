@@ -10,8 +10,8 @@ use futures::Stream;
 use serde::{Deserialize, Serialize};
 use std::pin::Pin;
 
-use crate::provider_error::ProviderError;
-use crate::provider_types::{ProviderCapabilities, ProviderRequest, ProviderResponse, ProviderStatus, StreamEvent};
+use super::provider_error::ProviderError;
+use super::provider_types::{ProviderCapabilities, ProviderRequest, ProviderResponse, ProviderStatus, StreamEvent};
 
 // ---------------------------------------------------------------------------
 // ModelInfo

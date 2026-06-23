@@ -1,4 +1,4 @@
-use crate::types::{
+use crate::mcp::types::{
     CallToolResult, GetPromptResult, McpPrompt, McpResource, McpTool,
     ResourceContents, ServerCapabilities, ServerInfo,
 };

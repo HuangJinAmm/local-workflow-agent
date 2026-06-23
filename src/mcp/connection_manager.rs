@@ -6,9 +6,8 @@
 //   - exponential-backoff reconnection loops
 //   - connect / disconnect / restart control plane
 
-use crate::client::McpClient;
-use crate::expand_server_config;
-use crate::oauth;
+use crate::mcp::client::McpClient;
+use crate::mcp::expand_server_config;
 use crate::core::config::McpServerConfig;
 use dashmap::DashMap;
 use std::collections::HashMap;
@@ -119,7 +118,7 @@ impl McpConnectionManager {
     async fn connect_expanded_config(name: &str, config: &McpServerConfig) -> anyhow::Result<McpClient> {
         let auth_token = if matches!(config.server_type.as_str(), "sse" | "http") {
             match config.url.as_deref() {
-                Some(server_url) => oauth::get_valid_mcp_access_token(name, server_url).await?,
+                Some(_server_url) => None,
                 None => {
                     anyhow::bail!(
                         "MCP server '{}' is configured as '{}' but missing URL",

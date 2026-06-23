@@ -1,6 +1,6 @@
-use crate::backend::{McpBackendKind, McpClientBackend, McpClientSnapshot};
-use crate::transport;
-use crate::types::{
+use crate::mcp::backend::{McpBackendKind, McpClientBackend, McpClientSnapshot};
+use crate::mcp::transport;
+use crate::mcp::types::{
     CallToolResult, GetPromptResult, McpContent, McpPrompt, McpPromptArgument,
     McpResource, McpTool, PromptMessage, PromptMessageContent, PromptsCapability,
     ResourceContents, ResourcesCapability, ServerCapabilities, ServerInfo, ToolsCapability,

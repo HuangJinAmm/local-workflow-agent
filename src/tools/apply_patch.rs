@@ -3,7 +3,7 @@
 // Parses standard unified diff format (as produced by `git diff` or `diff -u`).
 // Supports dry_run mode which validates the patch without writing any files.
 
-use crate::{PermissionLevel, Tool, ToolContext, ToolResult};
+use super::{PermissionLevel, Tool, ToolContext, ToolResult};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -432,7 +432,8 @@ impl Tool for ApplyPatchTool {
                 original_bytes,
                 new_content.as_bytes(),
                 self.name(),
-            );
+            )
+            .await;
         }
 
         ToolResult::success(format!(

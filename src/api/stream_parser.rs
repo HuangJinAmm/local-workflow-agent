@@ -9,8 +9,8 @@ use crate::core::provider_id::ProviderId;
 use futures::Stream;
 use std::pin::Pin;
 
-use crate::provider_error::ProviderError;
-use crate::provider_types::StreamEvent;
+use super::provider_error::ProviderError;
+use super::provider_types::StreamEvent;
 
 // ---------------------------------------------------------------------------
 // StreamParser

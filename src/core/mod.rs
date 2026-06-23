@@ -17,9 +17,6 @@ pub use sqlite_storage::{SqliteSessionStore, SessionSummary};
 // Attachment pipeline — assembles per-turn context attachments (T1-6).
 pub mod attachments;
 
-// Git utilities (T4-3).
-pub mod git_utils;
-
 // Credential storage for provider API keys and OAuth tokens.
 pub mod auth_store;
 pub use auth_store::{AuthStore, StoredCredential};
@@ -30,16 +27,6 @@ pub mod device_code;
 // Utility modules ported from src/utils/
 pub mod token_budget;
 pub mod truncate;
-pub mod format_utils;
-pub mod crypto_utils;
-pub mod status_notices;
-pub mod auto_mode;
-pub mod spinner;
-pub use spinner::{SPINNER_VERBS, TURN_COMPLETION_VERBS, sample_spinner_verb, sample_completion_verb};
-
-// Remote session sync and cloud session API (T3-1, T3-2).
-pub mod remote_session;
-pub mod cloud_session;
 
 // AGENTS.md hierarchical memory loading (T4-1).
 pub mod claudemd;
@@ -47,33 +34,8 @@ pub mod claudemd;
 // Message manipulation utilities (T4-2).
 pub mod message_utils;
 
-// Per-session file modification history (T4-6).
-pub mod file_history;
-
-// Snapshot/undo system — tracks file changes per session for /undo support.
-pub mod snapshot;
-
-// Per-session durable objectives (/goal feature).
-pub mod goal;
-pub use goal::{Goal, GoalError, GoalStatus, GoalStore, MAX_GOAL_TURNS, MAX_OBJECTIVE_CHARS,
-               goal_continuation_message, goal_kickoff_message, goal_system_prompt_addendum, goals_enabled};
-
-// Feature flag management via GrowthBook.
-pub mod feature_flags;
-
 // MCP resource prompt template rendering with variable substitution.
 pub mod mcp_templates;
-
-// IDE environment detection (VS Code, Cursor, JetBrains, …).
-pub mod ide;
-pub use ide::{IdeKind, detect_ide};
-
-// Background update checker — compares running version against GitHub releases.
-pub mod update_check;
-pub use update_check::{check_for_updates, UpdateInfo};
-
-// Self-contained HTML export of a session, used by the `/share` slash command.
-pub mod share_export;
 
 // Re-export commonly used types at the crate root
 pub use error::{ClaudeError, Result};
@@ -82,14 +44,12 @@ pub use types::{
     MessageCost, Role, ToolDefinition, ToolResultContent, UsageInfo,
 };
 pub use config::{AgentDefinition, BudgetSplitPolicy, Config, CommandTemplate, FormatterConfig, ManagedAgentConfig, ManagedAgentPreset, McpServerConfig, OutputFormat, PermissionMode, ProviderConfig, Settings, SkillsConfig, Theme, builtin_managed_agent_presets, default_agents, strip_jsonc_comments, substitute_env_vars};
-pub use import_config::{ClaudeMdPreview, ImportExecutionResult, ImportPaths, ImportPreview, ImportSelection, PreviewAction, PreviewField, SettingsPreview, build_import_preview, execute_import, summarize_import_result};
 
 // Skill discovery: filesystem and git URL skill loading.
 pub mod skill_discovery;
 pub use skill_discovery::{DiscoveredSkill, discover_skills, parse_skill_file};
 pub use cost::CostTracker;
 pub use history::ConversationSession;
-pub use feature_flags::FeatureFlagManager;
 pub use permissions::{
     AutoPermissionHandler, InteractivePermissionHandler,
     ManagedAutoPermissionHandler, ManagedInteractivePermissionHandler,
@@ -324,7 +284,7 @@ pub mod types {
         /// Files changed during this assistant turn, captured by the shadow snapshot.
         /// Populated by the query loop on `finish-step`; absent on user messages.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub snapshot_patch: Option<crate::snapshot::Patch>,
+        pub snapshot_patch: Option<serde_json::Value>,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -719,7 +679,7 @@ pub mod config {
 
     pub fn default_api_base_for_provider(provider_id: &str) -> Option<&'static str> {
         match provider_id {
-            "anthropic" => Some(crate::constants::ANTHROPIC_API_BASE),
+            "anthropic" => Some(crate::core::constants::ANTHROPIC_API_BASE),
             "openai" => Some("https://api.openai.com"),
             "minimax" => Some("https://api.minimax.io/anthropic"),
             "ollama" => Some("http://localhost:11434"),
@@ -933,7 +893,7 @@ pub mod config {
         pub output_format: OutputFormat,
         pub mcp_servers: Vec<McpServerConfig>,
         #[serde(default)]
-        pub lsp_servers: Vec<crate::lsp::LspServerConfig>,
+        pub lsp_servers: Vec<serde_json::Value>,
         pub allowed_tools: Vec<String>,
         pub disallowed_tools: Vec<String>,
         pub env: HashMap<String, String>,
@@ -1070,7 +1030,7 @@ pub mod config {
         pub remote_control_at_startup: bool,
         /// Persisted permission rules saved by the user across sessions.
         #[serde(default, rename = "permissionRules")]
-        pub permission_rules: Vec<crate::permissions::SerializedPermissionRule>,
+        pub permission_rules: Vec<crate::core::permissions::SerializedPermissionRule>,
         /// Names of plugins that have been explicitly enabled by the user.
         #[serde(default, rename = "enabledPlugins")]
         pub enabled_plugins: std::collections::HashSet<String>,
@@ -1274,7 +1234,7 @@ pub mod config {
                 Some("azure") => "gpt-4o",
                 Some("amazon-bedrock") => "anthropic.claude-sonnet-4-6-v1",
                 Some("venice") => "llama-3.3-70b",
-                _ => crate::constants::DEFAULT_MODEL, // Anthropic default
+                _ => crate::core::constants::DEFAULT_MODEL, // Anthropic default
             }
         }
 
@@ -1282,7 +1242,7 @@ pub mod config {
         /// Resolve the effective max-tokens.
         pub fn effective_max_tokens(&self) -> u32 {
             self.max_tokens
-                .unwrap_or(crate::constants::DEFAULT_MAX_TOKENS)
+                .unwrap_or(crate::core::constants::DEFAULT_MAX_TOKENS)
         }
 
         /// Resolve the effective compact threshold (0.0 - 1.0).
@@ -1290,15 +1250,15 @@ pub mod config {
             if self.compact_threshold > 0.0 {
                 self.compact_threshold
             } else {
-                crate::constants::DEFAULT_COMPACT_THRESHOLD
+                crate::core::constants::DEFAULT_COMPACT_THRESHOLD
             }
         }
 
         /// Resolve the effective output style for system-prompt assembly.
-        pub fn effective_output_style(&self) -> crate::system_prompt::OutputStyle {
+        pub fn effective_output_style(&self) -> crate::core::system_prompt::OutputStyle {
             self.output_style
                 .as_deref()
-                .map(crate::system_prompt::OutputStyle::from_str)
+                .map(crate::core::system_prompt::OutputStyle::from_str)
                 .unwrap_or_default()
         }
 
@@ -1306,10 +1266,9 @@ pub mod config {
         /// user-defined styles loaded from `~/.claurst/output-styles/`.
         pub fn resolve_output_style_prompt(&self) -> Option<String> {
             let style_name = self.output_style.as_deref().unwrap_or("default");
-            let styles = crate::output_styles::all_styles(&Settings::config_dir());
-            crate::output_styles::find_style(&styles, style_name)
-                .map(|style| style.prompt.clone())
-                .filter(|prompt| !prompt.trim().is_empty())
+            // output_styles module was removed; return None to use default behavior.
+            let _ = style_name;
+            None
         }
 
         pub fn resolve_provider_api_key(&self, provider_id: &str) -> Option<String> {
@@ -1336,7 +1295,7 @@ pub mod config {
                         .iter()
                         .find_map(|var| std::env::var(var).ok().filter(|v| !v.is_empty()))
                 })
-                .or_else(|| crate::AuthStore::load().api_key_for(provider_id))
+                .or_else(|| crate::core::AuthStore::load().api_key_for(provider_id))
                 // Support {env:VAR_NAME} patterns in the resolved value
                 .map(|key| substitute_env_vars(&key))
         }
@@ -1383,7 +1342,7 @@ pub mod config {
                 return Some((key, false));
             }
 
-            let tokens = crate::oauth::OAuthTokens::load().await?;
+            let tokens = crate::core::oauth::OAuthTokens::load().await?;
 
             // If expired and we have a refresh token, attempt silent refresh.
             // Clone the refresh token up-front so we don't borrow `tokens` during the async call.
@@ -1394,15 +1353,15 @@ pub mod config {
                     let body = serde_json::json!({
                         "grant_type": "refresh_token",
                         "refresh_token": rt,
-                        "client_id": crate::oauth::CLIENT_ID,
-                        "scope": crate::oauth::ALL_SCOPES.join(" "),
+                        "client_id": crate::core::oauth::CLIENT_ID,
+                        "scope": crate::core::oauth::ALL_SCOPES.join(" "),
                     });
                     let refreshed = 'refresh: {
                         let Ok(client) = reqwest::Client::builder()
                             .timeout(std::time::Duration::from_secs(30))
                             .build() else { break 'refresh None; };
                         let Ok(resp) = client
-                            .post(crate::oauth::TOKEN_URL)
+                            .post(crate::core::oauth::TOKEN_URL)
                             .header("content-type", "application/json")
                             .json(&body)
                             .send()
@@ -1460,7 +1419,7 @@ pub mod config {
 
         pub fn resolve_anthropic_api_base(&self) -> String {
             self.resolve_provider_api_base("anthropic")
-                .unwrap_or_else(|| crate::constants::ANTHROPIC_API_BASE.to_string())
+                .unwrap_or_else(|| crate::core::constants::ANTHROPIC_API_BASE.to_string())
         }
 
         /// Resolve the API base URL for the active provider.
@@ -1910,7 +1869,7 @@ pub mod context {
 
             // IDE context — injected when an IDE extension is connected.
             // Mirrors TS getContextAttachments() → IdeContext attachment.
-            if let Some(ide_ctx) = crate::attachments::get_ide_context() {
+            if let Some(ide_ctx) = crate::core::attachments::get_ide_context() {
                 parts.push(format!("# IDE Context\n{}", ide_ctx));
             }
 
@@ -1974,7 +1933,7 @@ pub mod context {
             // Global ~/.claurst/AGENTS.md
             if let Some(home) = dirs::home_dir() {
                 let global_claude_md =
-                    home.join(".claurst").join(crate::constants::CLAUDE_MD_FILENAME);
+                    home.join(".claurst").join(crate::core::constants::CLAUDE_MD_FILENAME);
                 if global_claude_md.exists() {
                     if let Ok(content) = tokio::fs::read_to_string(&global_claude_md).await {
                         claude_mds.push(format!(
@@ -1990,7 +1949,7 @@ pub mod context {
             let mut dir = Some(self.cwd.as_path());
             let mut project_mds: Vec<String> = vec![];
             while let Some(d) = dir {
-                let candidate = d.join(crate::constants::CLAUDE_MD_FILENAME);
+                let candidate = d.join(crate::core::constants::CLAUDE_MD_FILENAME);
                 if candidate.exists() {
                     if let Ok(content) = tokio::fs::read_to_string(&candidate).await {
                         project_mds.push(format!(
@@ -2255,7 +2214,7 @@ pub mod permissions {
     /// Central permission manager: holds mode, session rules, persistent
     /// rules, and any in-flight pending decisions.
     pub struct PermissionManager {
-        pub mode: crate::config::PermissionMode,
+        pub mode: crate::core::config::PermissionMode,
         /// Rules added during this session only.
         pub session_rules: Vec<PermissionRule>,
         /// Rules loaded from / saved to settings.json.
@@ -2268,8 +2227,8 @@ pub mod permissions {
         /// Construct from a mode and the current settings (which may contain
         /// previously-persisted rules).
         pub fn new(
-            mode: crate::config::PermissionMode,
-            settings: &crate::config::Settings,
+            mode: crate::core::config::PermissionMode,
+            settings: &crate::core::config::Settings,
         ) -> Self {
             let persistent_rules = settings
                 .permission_rules
@@ -2307,7 +2266,7 @@ pub mod permissions {
             working_dir: Option<&std::path::Path>,
             allowed_roots: &[std::path::PathBuf],
         ) -> PermissionDecision {
-            use crate::config::PermissionMode;
+            use crate::core::config::PermissionMode;
 
             // Step 1 — bypass everything
             if self.mode == PermissionMode::BypassPermissions {
@@ -2426,8 +2385,8 @@ pub mod permissions {
         pub fn add_persistent_allow(
             &mut self,
             tool_name: &str,
-            settings: &mut crate::config::Settings,
-        ) -> crate::error::Result<()> {
+            settings: &mut crate::core::config::Settings,
+        ) -> crate::core::error::Result<()> {
             let rule = PermissionRule {
                 tool_name: Some(tool_name.to_string()),
                 path_pattern: None,
@@ -2438,7 +2397,7 @@ pub mod permissions {
             settings.permission_rules.push(serialized);
             settings
                 .save_sync()
-                .map_err(|e| crate::error::ClaudeError::Config(e.to_string()))?;
+                .map_err(|e| crate::core::error::ClaudeError::Config(e.to_string()))?;
             self.persistent_rules.push(rule);
             Ok(())
         }
@@ -2448,8 +2407,8 @@ pub mod permissions {
             &mut self,
             tool_name: &str,
             path: &str,
-            settings: &mut crate::config::Settings,
-        ) -> crate::error::Result<()> {
+            settings: &mut crate::core::config::Settings,
+        ) -> crate::core::error::Result<()> {
             let rule = PermissionRule {
                 tool_name: Some(tool_name.to_string()),
                 path_pattern: Some(path.to_string()),
@@ -2460,7 +2419,7 @@ pub mod permissions {
             settings.permission_rules.push(serialized);
             settings
                 .save_sync()
-                .map_err(|e| crate::error::ClaudeError::Config(e.to_string()))?;
+                .map_err(|e| crate::core::error::ClaudeError::Config(e.to_string()))?;
             self.persistent_rules.push(rule);
             Ok(())
         }
@@ -2469,10 +2428,10 @@ pub mod permissions {
         pub fn remove_rule(
             &mut self,
             idx: usize,
-            settings: &mut crate::config::Settings,
-        ) -> crate::error::Result<()> {
+            settings: &mut crate::core::config::Settings,
+        ) -> crate::core::error::Result<()> {
             if idx >= settings.permission_rules.len() {
-                return Err(crate::error::ClaudeError::Config(format!(
+                return Err(crate::core::error::ClaudeError::Config(format!(
                     "Rule index {} out of bounds",
                     idx
                 )));
@@ -2480,7 +2439,7 @@ pub mod permissions {
             settings.permission_rules.remove(idx);
             settings
                 .save_sync()
-                .map_err(|e| crate::error::ClaudeError::Config(e.to_string()))?;
+                .map_err(|e| crate::core::error::ClaudeError::Config(e.to_string()))?;
             // Rebuild persistent_rules from the updated settings
             self.persistent_rules = settings
                 .permission_rules
@@ -2556,12 +2515,12 @@ pub mod permissions {
     /// Uses simple mode-based rules.  For rule-based evaluation backed by a
     /// `PermissionManager`, use `ManagedAutoPermissionHandler` instead.
     pub struct AutoPermissionHandler {
-        pub mode: crate::config::PermissionMode,
+        pub mode: crate::core::config::PermissionMode,
     }
 
     impl PermissionHandler for AutoPermissionHandler {
         fn check_permission(&self, request: &PermissionRequest) -> PermissionDecision {
-            use crate::config::PermissionMode;
+            use crate::core::config::PermissionMode;
             match self.mode {
                 PermissionMode::BypassPermissions => PermissionDecision::Allow,
                     PermissionMode::AcceptEdits => {
@@ -2600,12 +2559,12 @@ pub mod permissions {
     /// Uses simple mode-based rules.  For rule-based evaluation backed by a
     /// `PermissionManager`, use `ManagedInteractivePermissionHandler`.
     pub struct InteractivePermissionHandler {
-        pub mode: crate::config::PermissionMode,
+        pub mode: crate::core::config::PermissionMode,
     }
 
     impl PermissionHandler for InteractivePermissionHandler {
         fn check_permission(&self, request: &PermissionRequest) -> PermissionDecision {
-            use crate::config::PermissionMode;
+            use crate::core::config::PermissionMode;
             match self.mode {
                 PermissionMode::Plan => {
                     if request.is_read_only {
@@ -2724,7 +2683,7 @@ pub mod permissions {
     #[cfg(test)]
     mod perm_tests {
         use super::*;
-        use crate::config::{PermissionMode, Settings};
+        use crate::core::config::{PermissionMode, Settings};
 
         fn mgr(mode: PermissionMode) -> PermissionManager {
             PermissionManager::new(mode, &Settings::default())
@@ -2929,7 +2888,7 @@ pub mod permissions {
 // history module
 // ---------------------------------------------------------------------------
 pub mod history {
-    use crate::types::Message;
+    use crate::core::types::Message;
     use serde::{Deserialize, Serialize};
 
     /// A checkpoint snapshot of conversation messages at a specific point in time.
@@ -3020,7 +2979,7 @@ pub mod history {
             self.messages
                 .iter()
                 .rev()
-                .find(|m| m.role == crate::types::Role::User)
+                .find(|m| m.role == crate::core::types::Role::User)
         }
     }
 
@@ -3063,7 +3022,7 @@ pub mod history {
 
     /// The on-disk directory for conversation sessions.
     fn sessions_dir() -> std::path::PathBuf {
-        crate::config::Settings::config_dir().join("sessions")
+        crate::core::config::Settings::config_dir().join("sessions")
     }
 
     /// Save a session to `~/.claurst/sessions/<id>.json`.
@@ -3422,7 +3381,7 @@ pub mod cost {
 // hooks module
 // ---------------------------------------------------------------------------
 pub mod hooks {
-    use crate::config::{HookEntry, HookEvent};
+    use crate::core::config::{HookEntry, HookEvent};
     use serde_json::Value;
     use std::collections::HashMap;
     use std::path::Path;
@@ -3652,7 +3611,13 @@ pub mod oauth {
         /// Save tokens for a specific account profile under
         /// `~/.claurst/accounts/anthropic/<profile_id>/oauth_tokens.json`.
         pub async fn save_for_profile(&self, profile_id: &str) -> anyhow::Result<()> {
-            let path = crate::accounts::anthropic_token_path(profile_id);
+            let path = dirs::home_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join(".claurst")
+                .join("accounts")
+                .join("anthropic")
+                .join(profile_id)
+                .join("oauth_tokens.json");
             if let Some(parent) = path.parent() {
                 tokio::fs::create_dir_all(parent).await?;
             }
@@ -3662,7 +3627,13 @@ pub mod oauth {
 
         /// Load tokens for a specific account profile, or `None` if missing.
         pub async fn load_for_profile(profile_id: &str) -> Option<Self> {
-            let path = crate::accounts::anthropic_token_path(profile_id);
+            let path = dirs::home_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join(".claurst")
+                .join("accounts")
+                .join("anthropic")
+                .join(profile_id)
+                .join("oauth_tokens.json");
             let content = tokio::fs::read_to_string(&path).await.ok()?;
             serde_json::from_str(&content).ok()
         }
@@ -3672,103 +3643,38 @@ pub mod oauth {
         ///
         /// If `label` is None, derives the id from email/account_uuid.
         pub async fn save_and_register(&self, label: Option<&str>) -> anyhow::Result<String> {
-            use crate::accounts::{
-                AccountProfile, AccountRegistry, ensure_unique_profile_id,
-                slugify_profile_id, PROVIDER_ANTHROPIC,
-            };
-
-            let mut registry = AccountRegistry::load();
-
-            // Identity-aware id resolution: if a profile with the same email
-            // or account_uuid already exists, reuse it instead of stacking
-            // duplicates.
-            let existing_id = registry
-                .list(PROVIDER_ANTHROPIC)
-                .into_iter()
-                .find(|p| {
-                    (self.email.is_some() && p.email == self.email)
-                        || (self.account_uuid.is_some()
-                            && p.account_id == self.account_uuid)
-                })
-                .map(|p| p.id);
-
-            let id = if let Some(id) = existing_id {
-                id
-            } else if let Some(label) = label {
-                ensure_unique_profile_id(&registry, PROVIDER_ANTHROPIC, label)
-            } else {
-                let base = self
-                    .email
-                    .as_deref()
-                    .map(|e| e.split('@').next().unwrap_or(e).to_string())
-                    .or_else(|| self.account_uuid.clone())
-                    .unwrap_or_else(|| "account".to_string());
-                ensure_unique_profile_id(&registry, PROVIDER_ANTHROPIC, &base)
-            };
-
+            let id = label
+                .map(|l| l.to_string())
+                .or_else(|| self.email.clone())
+                .or_else(|| self.account_uuid.clone())
+                .unwrap_or_else(|| "default".to_string());
             self.save_for_profile(&id).await?;
-
-            let profile = AccountProfile {
-                id: id.clone(),
-                label: label.map(|l| slugify_profile_id(l)),
-                email: self.email.clone(),
-                account_id: self.account_uuid.clone(),
-                organization_uuid: self.organization_uuid.clone(),
-                subscription_tier: self.subscription_type.clone(),
-                added_at: None,
-                last_selected_at: None,
-            };
-            registry.upsert(PROVIDER_ANTHROPIC, profile, true)?;
             Ok(id)
         }
 
         /// Save (active profile, or new profile if registry empty) — back-compat
         /// shim for callers that don't think in terms of profiles.
         pub async fn save(&self) -> anyhow::Result<()> {
-            let registry = crate::accounts::AccountRegistry::load();
-            if let Some(active) = registry.active(crate::accounts::PROVIDER_ANTHROPIC) {
-                self.save_for_profile(active).await
-            } else {
-                // No registry yet — register as a new profile.
-                self.save_and_register(None).await.map(|_| ())
-            }
+            self.save_and_register(None).await.map(|_| ())
         }
 
         /// Load tokens for the active anthropic profile. Falls back to the
         /// legacy `~/.claurst/oauth_tokens.json` (auto-migrating it into a
         /// "default" profile on first read) if no registry exists.
         pub async fn load() -> Option<Self> {
-            let mut registry = crate::accounts::AccountRegistry::load();
-
-            if let Some(active) = registry.active(crate::accounts::PROVIDER_ANTHROPIC) {
-                if let Some(t) = Self::load_for_profile(active).await {
-                    return Some(t);
-                }
-            }
-
-            // Fallback: legacy single-file storage. Migrate on the spot.
+            // Fallback: legacy single-file storage.
             let legacy = Self::token_file_path();
             if legacy.exists() {
                 let content = tokio::fs::read_to_string(&legacy).await.ok()?;
-                let tokens: Self = serde_json::from_str(&content).ok()?;
-                // Best-effort migration: register under a derived id.
-                if let Ok(id) = tokens.save_and_register(None).await {
-                    let _ = tokio::fs::remove_file(&legacy).await;
-                    // refresh active pointer
-                    let _ = registry.switch_to(crate::accounts::PROVIDER_ANTHROPIC, &id);
-                }
-                return Some(tokens);
+                serde_json::from_str(&content).ok()
+            } else {
+                None
             }
-            None
         }
 
         /// Clear credentials for the active profile (or all credentials if
         /// `purge_all` is true) and drop the profile from the registry.
         pub async fn clear() -> anyhow::Result<()> {
-            let mut registry = crate::accounts::AccountRegistry::load();
-            if let Some(active) = registry.active(crate::accounts::PROVIDER_ANTHROPIC).map(String::from) {
-                registry.remove(crate::accounts::PROVIDER_ANTHROPIC, &active)?;
-            }
             // Also remove any legacy file.
             let legacy = Self::token_file_path();
             if legacy.exists() {
@@ -3851,8 +3757,7 @@ pub mod oauth {
         let stored_uuid = tokens.account_uuid.clone();
 
         let fetched = async {
-            let cfg = crate::oauth_config::get_oauth_config();
-            let url = format!("{}/api/oauth/profile", cfg.base_api_url);
+            let url = "https://api.anthropic.com/api/oauth/profile".to_string();
             let client = reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(10))
                 .build()
@@ -3886,32 +3791,61 @@ pub mod oauth {
 pub use oauth::OAuthTokens;
 
 // ---------------------------------------------------------------------------
-// New modules: keybindings, voice, analytics, lsp, team_memory_sync,
-//              system_prompt, memdir, oauth_config
+// Additional modules
 // ---------------------------------------------------------------------------
-pub mod keybindings;
-pub mod voice;
-pub mod analytics;
-pub mod lsp;
-pub mod session_tracing;
 pub mod context_collapse;
-pub mod team_memory_sync;
 pub mod system_prompt;
 pub mod memdir;
-pub mod oauth_config;
-pub mod codex_oauth;
-pub mod accounts;
-pub mod migrations;
-pub mod output_styles;
-pub mod feature_gates;
-pub mod tips;
-pub mod remote_settings;
-pub mod settings_sync;
-pub mod import_config;
-pub mod effort;
-pub mod prompt_history;
-pub mod bash_classifier;
-pub mod ps_classifier;
+
+// ---------------------------------------------------------------------------
+// bash_classifier module — minimal command risk classifier
+// ---------------------------------------------------------------------------
+pub mod bash_classifier {
+    /// Risk level for a bash command.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum BashRiskLevel {
+        Safe,
+        Moderate,
+        Critical,
+    }
+
+    /// Classify a bash command's risk level.
+    pub fn classify_bash_command(command: &str) -> BashRiskLevel {
+        let cmd = command.trim();
+        // Block obvious catastrophic patterns.
+        if cmd.contains("rm -rf /") || cmd.contains("mkfs") || cmd.contains(":(){:|:&};:")
+            || cmd.contains("dd if=") && cmd.contains("of=/dev/")
+        {
+            return BashRiskLevel::Critical;
+        }
+        BashRiskLevel::Safe
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ps_classifier module — minimal PowerShell command risk classifier
+// ---------------------------------------------------------------------------
+pub mod ps_classifier {
+    /// Risk level for a PowerShell command.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum PsRiskLevel {
+        Critical,
+        High,
+        Medium,
+        Low,
+    }
+
+    /// Classify a PowerShell command's risk level.
+    pub fn classify_ps_command(command: &str) -> PsRiskLevel {
+        let cmd = command.trim().to_lowercase();
+        if cmd.contains("remove-item") && (cmd.contains("-recurse") || cmd.contains("-force"))
+            && (cmd.contains("\\") || cmd.contains("c:"))
+        {
+            return PsRiskLevel::Critical;
+        }
+        PsRiskLevel::Low
+    }
+}
 
 // ---------------------------------------------------------------------------
 // tasks module — background task registry
@@ -4095,7 +4029,7 @@ mod tests {
 
     #[test]
     fn test_hooks_config_default() {
-        let cfg = crate::config::Config::default();
+        let cfg = crate::core::config::Config::default();
         assert!(cfg.hooks.is_empty());
     }
 
@@ -4123,26 +4057,26 @@ mod tests {
 
     #[test]
     fn test_config_effective_model_default() {
-        let cfg = crate::config::Config::default();
-        assert_eq!(cfg.effective_model(), crate::constants::DEFAULT_MODEL);
+        let cfg = crate::core::config::Config::default();
+        assert_eq!(cfg.effective_model(), crate::core::constants::DEFAULT_MODEL);
     }
 
     #[test]
     fn test_config_effective_model_override() {
-        let mut cfg = crate::config::Config::default();
+        let mut cfg = crate::core::config::Config::default();
         cfg.model = Some("claude-haiku-4-5-20251001".to_string());
         assert_eq!(cfg.effective_model(), "claude-haiku-4-5-20251001");
     }
 
     #[test]
     fn test_config_effective_max_tokens_default() {
-        let cfg = crate::config::Config::default();
-        assert_eq!(cfg.effective_max_tokens(), crate::constants::DEFAULT_MAX_TOKENS);
+        let cfg = crate::core::config::Config::default();
+        assert_eq!(cfg.effective_max_tokens(), crate::core::constants::DEFAULT_MAX_TOKENS);
     }
 
     #[test]
     fn test_config_effective_max_tokens_override() {
-        let mut cfg = crate::config::Config::default();
+        let mut cfg = crate::core::config::Config::default();
         cfg.max_tokens = Some(8192);
         assert_eq!(cfg.effective_max_tokens(), 8192);
     }
@@ -4154,7 +4088,7 @@ mod tests {
         let orig = std::env::var("ANTHROPIC_API_KEY").ok();
         std::env::remove_var("ANTHROPIC_API_KEY");
 
-        let mut cfg = crate::config::Config::default();
+        let mut cfg = crate::core::config::Config::default();
         cfg.api_key = Some("sk-ant-config-key".to_string());
         assert_eq!(cfg.resolve_api_key(), Some("sk-ant-config-key".to_string()));
 
@@ -4169,7 +4103,7 @@ mod tests {
         let orig = std::env::var("ANTHROPIC_API_KEY").ok();
         std::env::remove_var("ANTHROPIC_API_KEY");
 
-        let cfg = crate::config::Config::default();
+        let cfg = crate::core::config::Config::default();
         assert!(cfg.resolve_api_key().is_none());
 
         // Restore
@@ -4183,7 +4117,7 @@ mod tests {
         let orig = std::env::var("ANTHROPIC_API_KEY").ok();
         std::env::set_var("ANTHROPIC_API_KEY", "sk-ant-env-key");
 
-        let cfg = crate::config::Config::default();
+        let cfg = crate::core::config::Config::default();
         assert_eq!(cfg.resolve_api_key(), Some("sk-ant-env-key".to_string()));
 
         // Restore
@@ -4197,7 +4131,7 @@ mod tests {
 
     #[test]
     fn test_oauth_tokens_not_expired_no_expiry() {
-        let tokens = crate::oauth::OAuthTokens {
+        let tokens = crate::core::oauth::OAuthTokens {
             access_token: "at".to_string(),
             expires_at_ms: None,
             ..Default::default()
@@ -4207,7 +4141,7 @@ mod tests {
 
     #[test]
     fn test_oauth_tokens_expired_past() {
-        let tokens = crate::oauth::OAuthTokens {
+        let tokens = crate::core::oauth::OAuthTokens {
             access_token: "at".to_string(),
             // Expired 1 hour ago
             expires_at_ms: Some(chrono::Utc::now().timestamp_millis() - 3_600_000),
@@ -4218,7 +4152,7 @@ mod tests {
 
     #[test]
     fn test_oauth_tokens_not_expired_future() {
-        let tokens = crate::oauth::OAuthTokens {
+        let tokens = crate::core::oauth::OAuthTokens {
             access_token: "at".to_string(),
             // Expires in 1 hour
             expires_at_ms: Some(chrono::Utc::now().timestamp_millis() + 3_600_000),
@@ -4229,7 +4163,7 @@ mod tests {
 
     #[test]
     fn test_oauth_tokens_expired_within_buffer() {
-        let tokens = crate::oauth::OAuthTokens {
+        let tokens = crate::core::oauth::OAuthTokens {
             access_token: "at".to_string(),
             // Expires in 3 minutes — within the 5-minute buffer, so treated as expired
             expires_at_ms: Some(chrono::Utc::now().timestamp_millis() + 3 * 60 * 1000),
@@ -4240,8 +4174,8 @@ mod tests {
 
     #[test]
     fn test_oauth_uses_bearer_auth_with_inference_scope() {
-        let tokens = crate::oauth::OAuthTokens {
-            scopes: vec![crate::oauth::CLAUDE_AI_INFERENCE_SCOPE.to_string()],
+        let tokens = crate::core::oauth::OAuthTokens {
+            scopes: vec![crate::core::oauth::CLAUDE_AI_INFERENCE_SCOPE.to_string()],
             ..Default::default()
         };
         assert!(tokens.uses_bearer_auth());
@@ -4249,7 +4183,7 @@ mod tests {
 
     #[test]
     fn test_oauth_uses_bearer_auth_without_inference_scope() {
-        let tokens = crate::oauth::OAuthTokens {
+        let tokens = crate::core::oauth::OAuthTokens {
             scopes: vec!["org:create_api_key".to_string()],
             ..Default::default()
         };
@@ -4258,9 +4192,9 @@ mod tests {
 
     #[test]
     fn test_oauth_effective_credential_bearer() {
-        let tokens = crate::oauth::OAuthTokens {
+        let tokens = crate::core::oauth::OAuthTokens {
             access_token: "bearer_token_xyz".to_string(),
-            scopes: vec![crate::oauth::CLAUDE_AI_INFERENCE_SCOPE.to_string()],
+            scopes: vec![crate::core::oauth::CLAUDE_AI_INFERENCE_SCOPE.to_string()],
             api_key: Some("sk-ant-ignored".to_string()),
             ..Default::default()
         };
@@ -4269,7 +4203,7 @@ mod tests {
 
     #[test]
     fn test_oauth_effective_credential_api_key() {
-        let tokens = crate::oauth::OAuthTokens {
+        let tokens = crate::core::oauth::OAuthTokens {
             access_token: "at".to_string(),
             scopes: vec!["org:create_api_key".to_string()],
             api_key: Some("sk-ant-real-key".to_string()),
@@ -4280,9 +4214,9 @@ mod tests {
 
     #[test]
     fn test_oauth_effective_credential_bearer_empty_access_token() {
-        let tokens = crate::oauth::OAuthTokens {
+        let tokens = crate::core::oauth::OAuthTokens {
             access_token: String::new(),
-            scopes: vec![crate::oauth::CLAUDE_AI_INFERENCE_SCOPE.to_string()],
+            scopes: vec![crate::core::oauth::CLAUDE_AI_INFERENCE_SCOPE.to_string()],
             ..Default::default()
         };
         assert_eq!(tokens.effective_credential(), None);
@@ -4290,7 +4224,7 @@ mod tests {
 
     #[test]
     fn test_oauth_effective_credential_no_api_key() {
-        let tokens = crate::oauth::OAuthTokens {
+        let tokens = crate::core::oauth::OAuthTokens {
             access_token: "at".to_string(),
             scopes: vec!["org:create_api_key".to_string()],
             api_key: None,
@@ -4303,7 +4237,7 @@ mod tests {
 
     #[test]
     fn test_pkce_code_verifier_length() {
-        let verifier = crate::oauth::generate_code_verifier();
+        let verifier = crate::core::oauth::generate_code_verifier();
         // 32 bytes base64url-encoded (no padding) = ceil(32 * 4/3) = 43 chars
         assert_eq!(verifier.len(), 43, "Code verifier should be 43 base64url chars (32 bytes)");
         // Must only contain URL-safe base64 chars
@@ -4312,8 +4246,8 @@ mod tests {
 
     #[test]
     fn test_pkce_code_challenge_format() {
-        let verifier = crate::oauth::generate_code_verifier();
-        let challenge = crate::oauth::generate_code_challenge(&verifier);
+        let verifier = crate::core::oauth::generate_code_verifier();
+        let challenge = crate::core::oauth::generate_code_challenge(&verifier);
         // SHA256 = 32 bytes → 43 base64url chars
         assert_eq!(challenge.len(), 43, "Code challenge should be 43 base64url chars (SHA256 = 32 bytes)");
         assert!(challenge.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
@@ -4323,21 +4257,21 @@ mod tests {
     fn test_pkce_challenge_deterministic() {
         // Same verifier must produce same challenge
         let verifier = "test_verifier_fixed_input";
-        let c1 = crate::oauth::generate_code_challenge(verifier);
-        let c2 = crate::oauth::generate_code_challenge(verifier);
+        let c1 = crate::core::oauth::generate_code_challenge(verifier);
+        let c2 = crate::core::oauth::generate_code_challenge(verifier);
         assert_eq!(c1, c2);
     }
 
     #[test]
     fn test_pkce_verifier_unique() {
-        let v1 = crate::oauth::generate_code_verifier();
-        let v2 = crate::oauth::generate_code_verifier();
+        let v1 = crate::core::oauth::generate_code_verifier();
+        let v2 = crate::core::oauth::generate_code_verifier();
         assert_ne!(v1, v2, "Code verifiers should be unique");
     }
 
     #[test]
     fn test_pkce_state_length_and_format() {
-        let state = crate::oauth::generate_state();
+        let state = crate::core::oauth::generate_state();
         assert_eq!(state.len(), 43);
         assert!(state.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
     }
@@ -4349,8 +4283,8 @@ mod tests {
         let challenge = "test_challenge";
         let state = "test_state";
         let port: u16 = 12345;
-        let url = crate::oauth::build_auth_url(
-            crate::oauth::CONSOLE_AUTHORIZE_URL,
+        let url = crate::core::oauth::build_auth_url(
+            crate::core::oauth::CONSOLE_AUTHORIZE_URL,
             challenge,
             state,
             port,
@@ -4364,13 +4298,13 @@ mod tests {
         assert!(url.contains("code_challenge=test_challenge"));
         assert!(url.contains("state=test_state"));
         assert!(url.contains("code_challenge_method=S256"));
-        assert!(url.contains(&format!("client_id={}", crate::oauth::CLIENT_ID)));
+        assert!(url.contains(&format!("client_id={}", crate::core::oauth::CLIENT_ID)));
     }
 
     #[test]
     fn test_build_auth_url_manual_has_manual_redirect() {
-        let url = crate::oauth::build_auth_url(
-            crate::oauth::CLAUDE_AI_AUTHORIZE_URL,
+        let url = crate::core::oauth::build_auth_url(
+            crate::core::oauth::CLAUDE_AI_AUTHORIZE_URL,
             "challenge",
             "state",
             9999,
@@ -4389,8 +4323,8 @@ mod tests {
 
     // ---- Permission handler tests -------------------------------------------
 
-    fn make_req(tool_name: &str, is_read_only: bool) -> crate::permissions::PermissionRequest {
-        crate::permissions::PermissionRequest {
+    fn make_req(tool_name: &str, is_read_only: bool) -> crate::core::permissions::PermissionRequest {
+        crate::core::permissions::PermissionRequest {
             tool_name: tool_name.to_string(),
             description: format!("{} operation", tool_name),
             details: None,
@@ -4404,75 +4338,75 @@ mod tests {
 
     #[test]
     fn test_auto_handler_bypass_allows_all() {
-        let handler = crate::permissions::AutoPermissionHandler {
-            mode: crate::config::PermissionMode::BypassPermissions,
+        let handler = crate::core::permissions::AutoPermissionHandler {
+            mode: crate::core::config::PermissionMode::BypassPermissions,
         };
         assert_eq!(
             handler.check_permission(&make_req("FileWrite", false)),
-            crate::permissions::PermissionDecision::Allow
+            crate::core::permissions::PermissionDecision::Allow
         );
     }
 
     #[test]
     fn test_auto_handler_default_allows_reads() {
-        let handler = crate::permissions::AutoPermissionHandler {
-            mode: crate::config::PermissionMode::Default,
+        let handler = crate::core::permissions::AutoPermissionHandler {
+            mode: crate::core::config::PermissionMode::Default,
         };
         assert_eq!(
             handler.check_permission(&make_req("FileRead", true)),
-            crate::permissions::PermissionDecision::Allow
+            crate::core::permissions::PermissionDecision::Allow
         );
     }
 
     #[test]
     fn test_auto_handler_default_denies_writes() {
-        let handler = crate::permissions::AutoPermissionHandler {
-            mode: crate::config::PermissionMode::Default,
+        let handler = crate::core::permissions::AutoPermissionHandler {
+            mode: crate::core::config::PermissionMode::Default,
         };
         assert_eq!(
             handler.check_permission(&make_req("FileWrite", false)),
-            crate::permissions::PermissionDecision::Deny
+            crate::core::permissions::PermissionDecision::Deny
         );
     }
 
     #[test]
     fn test_auto_handler_accept_edits_only_allows_edit() {
-        let handler = crate::permissions::AutoPermissionHandler {
-            mode: crate::config::PermissionMode::AcceptEdits,
+        let handler = crate::core::permissions::AutoPermissionHandler {
+            mode: crate::core::config::PermissionMode::AcceptEdits,
         };
         assert_eq!(
             handler.check_permission(&make_req("Edit", false)),
-            crate::permissions::PermissionDecision::Allow
+            crate::core::permissions::PermissionDecision::Allow
         );
         assert_eq!(
             handler.check_permission(&make_req("FileWrite", false)),
-            crate::permissions::PermissionDecision::Deny
+            crate::core::permissions::PermissionDecision::Deny
         );
     }
 
     #[test]
     fn test_interactive_handler_default_allows_writes() {
         // Legacy InteractivePermissionHandler still allows everything outside Plan.
-        let handler = crate::permissions::InteractivePermissionHandler {
-            mode: crate::config::PermissionMode::Default,
+        let handler = crate::core::permissions::InteractivePermissionHandler {
+            mode: crate::core::config::PermissionMode::Default,
         };
         assert_eq!(
             handler.check_permission(&make_req("FileWrite", false)),
-            crate::permissions::PermissionDecision::Allow
+            crate::core::permissions::PermissionDecision::Allow
         );
     }
 
     #[test]
     fn test_managed_interactive_default_asks_for_write() {
         let manager = std::sync::Arc::new(std::sync::Mutex::new(
-            crate::permissions::PermissionManager::new(
-                crate::config::PermissionMode::Default,
-                &crate::config::Settings::default(),
+            crate::core::permissions::PermissionManager::new(
+                crate::core::config::PermissionMode::Default,
+                &crate::core::config::Settings::default(),
             ),
         ));
-        let handler = crate::permissions::InteractivePermissionHandler::with_manager(manager);
+        let handler = crate::core::permissions::InteractivePermissionHandler::with_manager(manager);
         match handler.check_permission(&make_req("FileWrite", false)) {
-            crate::permissions::PermissionDecision::Ask { .. } => {}
+            crate::core::permissions::PermissionDecision::Ask { .. } => {}
             other => panic!("Expected Ask, got {:?}", other),
         }
     }
@@ -4480,18 +4414,18 @@ mod tests {
     #[test]
     fn test_managed_interactive_default_allows_workspace_read() {
         let manager = std::sync::Arc::new(std::sync::Mutex::new(
-            crate::permissions::PermissionManager::new(
-                crate::config::PermissionMode::Default,
-                &crate::config::Settings::default(),
+            crate::core::permissions::PermissionManager::new(
+                crate::core::config::PermissionMode::Default,
+                &crate::core::config::Settings::default(),
             ),
         ));
-        let handler = crate::permissions::InteractivePermissionHandler::with_manager(manager);
+        let handler = crate::core::permissions::InteractivePermissionHandler::with_manager(manager);
         let mut req = make_req("Read", true);
         req.path = Some("/workspace/src/lib.rs".to_string());
         req.working_dir = Some(std::path::PathBuf::from("/workspace"));
         assert_eq!(
             handler.check_permission(&req),
-            crate::permissions::PermissionDecision::Allow
+            crate::core::permissions::PermissionDecision::Allow
         );
     }
 
@@ -4614,4 +4548,77 @@ mod tests {
                 "Preset {} executor_model must be provider/model", preset.name);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Stub modules for deleted functionality (kept minimal for compatibility)
+// ---------------------------------------------------------------------------
+
+/// Effort level for model reasoning budget.
+pub mod effort {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum EffortLevel {
+        Low,
+        Medium,
+        High,
+        Max,
+    }
+
+    impl EffortLevel {
+        pub fn thinking_budget_tokens(self) -> Option<u32> {
+            match self {
+                EffortLevel::Low => Some(1024),
+                EffortLevel::Medium => Some(4096),
+                EffortLevel::High => Some(16384),
+                EffortLevel::Max => Some(32768),
+            }
+        }
+
+        pub fn temperature(self) -> Option<f32> {
+            match self {
+                EffortLevel::Low => Some(0.0),
+                EffortLevel::Medium => Some(0.3),
+                EffortLevel::High => Some(0.5),
+                EffortLevel::Max => Some(0.7),
+            }
+        }
+    }
+}
+
+/// Snapshot/undo system stub (full implementation was removed).
+pub mod snapshot {
+    use std::path::Path;
+    use std::sync::Arc;
+
+    #[derive(Debug, Clone, Default)]
+    pub struct ShadowSnapshot;
+
+    #[derive(Debug, Clone, Default)]
+    pub struct FilePatch;
+
+    pub fn get_or_create(_root: &Path) -> Option<Arc<ShadowSnapshot>> {
+        None
+    }
+
+    impl ShadowSnapshot {
+        pub async fn track(&self) -> Option<String> {
+            None
+        }
+
+        pub async fn patch(&self, _hash: &str) -> FilePatch {
+            FilePatch
+        }
+    }
+}
+
+/// Feature gates stub.
+pub mod feature_gates {
+    pub fn is_feature_enabled(_name: &str) -> bool {
+        false
+    }
+}
+
+/// Sample a spinner verb (stub — full implementation was removed).
+pub fn sample_spinner_verb() -> &'static str {
+    "working"
 }

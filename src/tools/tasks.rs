@@ -4,7 +4,7 @@
 // Tasks have id, subject, description, status, owner, blocks/blocked-by dependencies,
 // and optional output.
 
-use crate::{PermissionLevel, Tool, ToolContext, ToolResult};
+use super::{PermissionLevel, Tool, ToolContext, ToolResult};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use once_cell::sync::Lazy;

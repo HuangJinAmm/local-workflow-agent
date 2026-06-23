@@ -11,8 +11,7 @@
 // Supports $ARGUMENTS placeholder substitution.
 // Use skill="list" to discover available skills.
 
-use crate::bundled_skills::{expand_prompt, find_bundled_skill, user_invocable_skills};
-use crate::{PermissionLevel, Tool, ToolContext, ToolResult};
+use super::{PermissionLevel, Tool, ToolContext, ToolResult};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -71,20 +70,6 @@ impl Tool for SkillTool {
         let skill_name = params.skill.trim_end_matches(".md");
         debug!(skill = skill_name, "Loading skill");
 
-        // Check bundled skills first — they take precedence over disk files.
-        if let Some(bundled) = find_bundled_skill(skill_name) {
-            let args = params.args.as_deref().unwrap_or("");
-            let prompt = expand_prompt(bundled, args);
-            let prompt = prompt.trim().to_string();
-            if prompt.is_empty() {
-                return ToolResult::error(format!(
-                    "Bundled skill '{}' expanded to empty content.",
-                    skill_name
-                ));
-            }
-            return ToolResult::success(prompt);
-        }
-
         let (skill_path, raw) = match find_and_read_skill(skill_name, &dirs).await {
             Some(found) => found,
             None => {
@@ -138,15 +123,9 @@ fn skill_search_dirs(ctx: &ToolContext) -> Vec<PathBuf> {
 }
 
 async fn list_skills(dirs: &[PathBuf]) -> ToolResult {
-    // Start with the bundled skills.
     let mut lines: Vec<String> = Vec::new();
-    let bundled = user_invocable_skills();
-    for (name, desc) in &bundled {
-        lines.push(format!("  {} — {} [bundled]", name, desc));
-    }
-    let bundled_names: Vec<&str> = bundled.iter().map(|(n, _)| *n).collect();
 
-    // Then add disk skills, skipping any that shadow a bundled name.
+    // Disk skills.
     let mut disk_skills: Vec<(String, PathBuf)> = Vec::new();
     for dir in dirs {
         match tokio::fs::read_dir(dir).await {
@@ -156,11 +135,7 @@ async fn list_skills(dirs: &[PathBuf]) -> ToolResult {
                     if path.extension().map_or(false, |e| e == "md") {
                         if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
                             let name = stem.to_string();
-                            // Deduplicate — project-level shadows user-level;
-                            // bundled skills shadow everything.
-                            if !disk_skills.iter().any(|(n, _)| n == &name)
-                                && !bundled_names.contains(&name.as_str())
-                            {
+                            if !disk_skills.iter().any(|(n, _)| n == &name) {
                                 disk_skills.push((name, path));
                             }
                         }
@@ -177,7 +152,7 @@ async fn list_skills(dirs: &[PathBuf]) -> ToolResult {
         lines.push(format!("  {} — {}", name, desc));
     }
 
-    let total = bundled.len() + disk_skills.len();
+    let total = disk_skills.len();
     if total == 0 {
         return ToolResult::success(
             "No skills found. Create .md files in .claurst/commands/ to define skills.\n\

@@ -5,7 +5,7 @@
 // collects the user's answer and sends it back through the oneshot reply
 // channel.  In non-interactive / headless mode execution returns an error.
 
-use crate::{PermissionLevel, Tool, ToolContext, ToolResult, UserQuestionEvent};
+use super::{PermissionLevel, Tool, ToolContext, ToolResult, UserQuestionEvent};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{json, Value};

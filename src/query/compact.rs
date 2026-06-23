@@ -876,7 +876,7 @@ fn strip_images(messages: Vec<crate::core::types::Message>) -> Vec<crate::core::
 pub async fn reactive_compact(
     messages: Vec<crate::core::types::Message>,
     client: &crate::api::AnthropicClient,
-    config: &crate::QueryConfig,
+    config: &super::QueryConfig,
     cancel: tokio_util::sync::CancellationToken,
     recently_modified: &[std::path::PathBuf],
 ) -> Result<CompactResult, crate::core::error::ClaudeError> {
@@ -965,7 +965,7 @@ pub async fn reactive_compact(
 pub async fn context_collapse(
     messages: Vec<crate::core::types::Message>,
     client: &crate::api::AnthropicClient,
-    config: &crate::QueryConfig,
+    config: &super::QueryConfig,
 ) -> Result<CompactResult, crate::core::error::ClaudeError> {
     use crate::api::{AnthropicStreamEvent, ApiMessage, CreateMessageRequest, StreamAccumulator, StreamHandler, SystemPrompt};
     use serde_json::Value;

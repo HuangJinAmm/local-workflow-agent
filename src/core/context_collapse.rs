@@ -5,9 +5,9 @@
 //!
 //! Gated behind `cached_microcompact` feature flag.
 
-use crate::types::Message;
+use crate::core::types::Message;
 #[cfg(feature = "cached_microcompact")]
-use crate::types::Role;
+use crate::core::types::Role;
 use serde::{Deserialize, Serialize};
 
 /// Strategy for collapsing a conversation when it exceeds token limits.

@@ -1,7 +1,7 @@
 // FileEdit tool: exact string replacement with old/new strings (like sed but
 // deterministic).  Mirrors the TypeScript Edit tool behaviour.
 
-use crate::{PermissionLevel, Tool, ToolContext, ToolResult};
+use super::{PermissionLevel, Tool, ToolContext, ToolResult};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -132,7 +132,7 @@ impl Tool for FileEditTool {
         };
 
         // Write back
-        if let Err(e) = crate::write_atomic(&path, new_content.as_bytes()).await {
+        if let Err(e) = super::write_atomic(&path, new_content.as_bytes()).await {
             return ToolResult::error(format!("Failed to write file {}: {}", path.display(), e));
         }
 
@@ -141,10 +141,11 @@ impl Tool for FileEditTool {
             content.as_bytes(),
             new_content.as_bytes(),
             self.name(),
-        );
+        )
+        .await;
 
         // Run any configured formatter for this file type.
-        crate::try_format_file(&path.to_string_lossy(), ctx).await;
+        super::try_format_file(&path.to_string_lossy(), ctx).await;
 
         // Build a diff snippet for the response
         let replacements = if params.replace_all { count } else { 1 };

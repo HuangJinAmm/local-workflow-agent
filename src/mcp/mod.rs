@@ -32,7 +32,6 @@ pub use connection_manager::{McpConnectionManager, McpServerStatus};
 pub mod backend;
 pub mod connection_manager;
 pub mod registry;
-pub mod oauth;
 pub mod rmcp_backend;
 
 // ---------------------------------------------------------------------------
@@ -589,7 +588,7 @@ pub mod client {
             match config.server_type.as_str() {
                 "stdio" => Self::connect_stdio(config).await,
                 "sse" => {
-                    let backend = crate::rmcp_backend::RmcpClientBackend::connect_legacy_sse(
+                    let backend = crate::mcp::rmcp_backend::RmcpClientBackend::connect_legacy_sse(
                         config,
                         auth_token,
                     )
@@ -611,7 +610,7 @@ pub mod client {
                             )
                         })?;
                         let protocol_version_label = protocol_version.as_str().to_string();
-                        match crate::rmcp_backend::RmcpClientBackend::connect_http(
+                        match crate::mcp::rmcp_backend::RmcpClientBackend::connect_http(
                             config,
                             auth_token.clone(),
                             protocol_version,
@@ -664,7 +663,7 @@ pub mod client {
         /// Connect to an MCP server using stdio transport. The `config` should
         /// already have env vars expanded via `expand_server_config`.
         pub async fn connect_stdio(config: &McpServerConfig) -> anyhow::Result<Self> {
-            let backend = crate::rmcp_backend::RmcpClientBackend::connect_stdio(config).await?;
+            let backend = crate::mcp::rmcp_backend::RmcpClientBackend::connect_stdio(config).await?;
             Ok(Self::from_backend(Arc::new(backend)))
         }
 
@@ -847,6 +846,20 @@ pub enum McpAuthState {
     Authenticated { token_expiry: Option<chrono::DateTime<chrono::Utc>> },
     /// An error occurred reading / initiating auth.
     Error(String),
+}
+
+/// OAuth authorization session for an MCP server.
+#[derive(Debug, Clone)]
+pub struct McpAuthSession {
+    /// URL to open in the browser for the user to authorize.
+    pub auth_url: String,
+}
+
+/// Result of a successful OAuth authentication flow.
+#[derive(Debug, Clone)]
+pub struct McpAuthResult {
+    /// Whether the authentication completed successfully.
+    pub success: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -1179,25 +1192,7 @@ impl McpManager {
             return McpAuthState::NotRequired;
         }
 
-        if let Some(token) = oauth::get_mcp_token(server_name) {
-            if !token.is_expired(60) {
-                return McpAuthState::Authenticated {
-                    token_expiry: token.expiry_datetime(),
-                };
-            }
-
-            if token.refresh_token.is_some() {
-                return McpAuthState::Required {
-                    auth_url: format!(
-                        "{} (refreshable token detected; connection will try to refresh automatically)",
-                        config.url
-                            .clone()
-                            .unwrap_or_else(|| "(unknown URL)".to_string())
-                    ),
-                };
-            }
-        }
-
+        // oauth module was removed; tokens are never stored.
         McpAuthState::Required {
             auth_url: config
                 .url
@@ -1212,43 +1207,21 @@ impl McpManager {
     }
 
     /// Build a full OAuth authorization session for an HTTP/SSE MCP server.
-    pub async fn begin_auth(&self, server_name: &str) -> anyhow::Result<oauth::McpAuthSession> {
-        let config = self
+    pub async fn begin_auth(&self, server_name: &str) -> anyhow::Result<McpAuthSession> {
+        let _ = self
             .server_configs
             .get(server_name)
             .ok_or_else(|| anyhow::anyhow!("Unknown MCP server: {}", server_name))?;
-
-        let base_url = config
-            .url
-            .as_deref()
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "MCP server '{}' has no URL configured (required for OAuth)",
-                    server_name
-                )
-            })?;
-
-        oauth::begin_mcp_auth(server_name, base_url).await
+        anyhow::bail!("OAuth support was removed; server '{}' requires manual configuration", server_name)
     }
 
     /// Run the browser-based OAuth flow and persist the resulting token.
-    pub async fn authenticate(&self, server_name: &str) -> anyhow::Result<oauth::McpAuthResult> {
-        let config = self
+    pub async fn authenticate(&self, server_name: &str) -> anyhow::Result<McpAuthResult> {
+        let _ = self
             .server_configs
             .get(server_name)
             .ok_or_else(|| anyhow::anyhow!("Unknown MCP server: {}", server_name))?;
-
-        let base_url = config
-            .url
-            .as_deref()
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "MCP server '{}' has no URL configured (required for OAuth)",
-                    server_name
-                )
-            })?;
-
-        oauth::run_mcp_auth_flow(server_name, base_url).await
+        anyhow::bail!("OAuth support was removed; server '{}' requires manual configuration", server_name)
     }
 
     /// Store an OAuth access token for an MCP server.
@@ -1260,34 +1233,16 @@ impl McpManager {
         token: &str,
         expires_in: Option<u64>,
     ) -> anyhow::Result<()> {
-        let expires_at = expires_in.map(|secs| {
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs()
-                + secs
-        });
-        let mcp_token = oauth::McpToken {
-            access_token: token.to_string(),
-            refresh_token: None,
-            expires_at,
-            scope: None,
-            server_name: server_name.to_string(),
-        };
-        oauth::store_mcp_token(&mcp_token)
-            .map_err(|e| anyhow::anyhow!("Failed to store MCP token for '{}': {}", server_name, e))
+        let _ = (server_name, token, expires_in);
+        Ok(())
     }
 
     /// Load the stored OAuth access token for an MCP server, if any.
     ///
     /// Returns `None` if no token is stored or the token cannot be refreshed.
     pub async fn load_token(&self, server_name: &str) -> Option<String> {
-        let config = self.server_configs.get(server_name)?;
-        let server_url = config.url.as_deref()?;
-        oauth::get_valid_mcp_access_token(server_name, server_url)
-            .await
-            .ok()
-            .flatten()
+        let _ = self.server_configs.get(server_name)?;
+        None
     }
 
     // -----------------------------------------------------------------------
@@ -1618,28 +1573,11 @@ mod tests {
             },
         );
 
-        let expires_at = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs()
-            + 3600;
-        let token = oauth::McpToken {
-            access_token: "tok".to_string(),
-            refresh_token: None,
-            expires_at: Some(expires_at),
-            scope: None,
-            server_name: "remote".to_string(),
-        };
-        oauth::store_mcp_token(&token).expect("store token");
-
+        // oauth module was removed; auth_state should return Required.
         match mgr.auth_state("remote") {
-            McpAuthState::Authenticated { token_expiry } => {
-                assert_eq!(token_expiry, token.expiry_datetime());
-            }
-            other => panic!("expected authenticated, got {:?}", other),
+            McpAuthState::Required { .. } => {}
+            other => panic!("expected Required, got {:?}", other),
         }
-
-        oauth::remove_mcp_token("remote").ok();
     }
 }
 

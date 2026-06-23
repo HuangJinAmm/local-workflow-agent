@@ -1,6 +1,6 @@
 // FileWrite tool: write/create files.
 
-use crate::{PermissionLevel, Tool, ToolContext, ToolResult};
+use super::{PermissionLevel, Tool, ToolContext, ToolResult};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -96,7 +96,7 @@ impl Tool for FileWriteTool {
         let is_new = !existed;
 
         // Write the file
-        if let Err(e) = crate::write_atomic(&path, params.content.as_bytes()).await {
+        if let Err(e) = super::write_atomic(&path, params.content.as_bytes()).await {
             return ToolResult::error(format!(
                 "Failed to write file {}: {}",
                 path.display(),
@@ -109,10 +109,11 @@ impl Tool for FileWriteTool {
             &before_content,
             params.content.as_bytes(),
             self.name(),
-        );
+        )
+        .await;
 
         // Run any configured formatter for this file type.
-        crate::try_format_file(&path.to_string_lossy(), ctx).await;
+        super::try_format_file(&path.to_string_lossy(), ctx).await;
 
         let line_count = params.content.lines().count();
         let byte_count = params.content.len();

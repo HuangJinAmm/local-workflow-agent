@@ -1,7 +1,7 @@
 //! Message manipulation utilities.
 //! Mirrors key functions from src/utils/messages.ts (5,512 lines).
 
-use crate::types::{ContentBlock, Message, MessageContent, Role};
+use crate::core::types::{ContentBlock, Message, MessageContent, Role};
 use serde_json::Value;
 
 // ---------------------------------------------------------------------------
@@ -143,7 +143,7 @@ pub fn format_tool_result(result: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{ContentBlock, Message, MessageContent, Role};
+    use crate::core::types::{ContentBlock, Message, MessageContent, Role};
 
     fn user_msg(text: &str) -> Message {
         Message { role: Role::User, content: MessageContent::Text(text.to_string()), uuid: None, cost: None, snapshot_patch: None }

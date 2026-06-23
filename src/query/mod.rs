@@ -8,25 +8,11 @@
 // 5. Handles auto-compact when the context window fills up
 // 6. Manages stop conditions (end_turn, max_turns, cancellation)
 
-pub mod agent_tool;
-pub mod auto_dream;
-pub mod away_summary;
 pub mod command_queue;
-pub mod goal_loop;
-pub mod managed_orchestrator;
 pub mod compact;
 pub mod context_analyzer;
-pub mod coordinator;
-pub mod cron_scheduler;
 pub mod session_memory;
-pub mod skill_prefetch;
-pub use agent_tool::{AgentTool, init_team_swarm_runner};
 pub use command_queue::{CommandPriority, CommandQueue, QueuedCommand, drain_command_queue};
-pub use cron_scheduler::start_cron_scheduler;
-pub use goal_loop::{GoalContinuation, StopReason, check_and_continue_goal, mark_goal_complete};
-pub use skill_prefetch::{
-    SkillDefinition, SkillIndex, SharedSkillIndex, prefetch_skills, format_skill_listing,
-};
 pub use compact::{
     AutoCompactState, CompactResult, CompactTrigger, MicroCompactConfig, MessageGroup, TokenWarningState,
     auto_compact_if_needed, calculate_messages_to_keep_index, calculate_token_warning_state,
@@ -105,7 +91,7 @@ pub struct QueryConfig {
     /// When set, `prefetch_skills` is spawned once before the loop begins and
     /// the resulting index is used to inject a skill listing attachment into
     /// the conversation context.
-    pub skill_index: Option<SharedSkillIndex>,
+    pub skill_index: Option<()>,
     /// Optional USD spend cap. The query loop checks accumulated cost after
     /// each turn and aborts with `QueryOutcome::BudgetExceeded` when exceeded.
     pub max_budget_usd: Option<f64>,
@@ -741,20 +727,9 @@ pub async fn run_query_loop(
         .and_then(|a| a.max_turns)
         .unwrap_or(config.max_turns);
 
-    // Shadow-git snapshot: capture the worktree state before any tools run so we
-    // can produce a per-turn file-change patch when the turn ends.
-    let shadow_snap: Option<std::sync::Arc<crate::core::snapshot::ShadowSnapshot>> =
-        if tool_ctx.config.auto_commits == Some(true) {
-            crate::core::snapshot::get_or_create(&tool_ctx.working_dir)
-        } else {
-            None
-        };
-    // Pre-capture tree hash; refreshed at the start of each turn's tool phase.
-    let initial_snapshot: Option<String> = if let Some(ref s) = shadow_snap {
-        s.track().await
-    } else {
-        None
-    };
+    // Shadow-git snapshot: stubbed (full implementation was removed).
+    let shadow_snap: Option<std::sync::Arc<crate::core::snapshot::ShadowSnapshot>> = None;
+    let initial_snapshot: Option<String> = None;
 
     loop {
         turn += 1;
@@ -862,11 +837,8 @@ pub async fn run_query_loop(
             // If managed-agent mode is active, append orchestration instructions.
             if let Some(ref ma_config) = config.managed_agents {
                 if ma_config.enabled {
-                    let ma_prompt = crate::managed_orchestrator::managed_agent_system_prompt(ma_config);
-                    patched.append_system_prompt = Some(match &patched.append_system_prompt {
-                        Some(existing) => format!("{}\n\n{}", existing, ma_prompt),
-                        None => ma_prompt,
-                    });
+                    // managed_orchestrator module was removed — skip.
+                    let _ = ma_config;
                 }
             }
 
@@ -1059,9 +1031,7 @@ pub async fn run_query_loop(
 
                     // Notify TUI that we're calling the provider using a random spinner verb
                     if let Some(ref tx) = event_tx {
-                        use crate::core::sample_spinner_verb;
-                        let seed = (provider_id_str.len() ^ model_id_str.len()) as usize;
-                        let verb = sample_spinner_verb(seed);
+                        let verb = crate::core::sample_spinner_verb();
                         let _ = tx.send(QueryEvent::Status(format!("✳ {}…", verb)));
                     }
 
@@ -1388,12 +1358,8 @@ pub async fn run_query_loop(
                     }
 
                     // Attach snapshot patch covering all file changes this query.
-                    if let (Some(ref snap), Some(ref hash)) = (&shadow_snap, &initial_snapshot) {
-                        let patch = snap.patch(hash).await;
-                        if !patch.files.is_empty() {
-                            assistant_msg.snapshot_patch = Some(patch);
-                        }
-                    }
+                    // (snapshot patch functionality was removed)
+                    let _ = (&shadow_snap, &initial_snapshot);
 
                     return QueryOutcome::EndTurn {
                         message: assistant_msg,
@@ -1797,53 +1763,11 @@ pub async fn run_query_loop(
                     }
                 }
 
-                // Trigger AutoDream consolidation check (non-blocking, best-effort).
-                // maybe_trigger() checks gates + acquires lock. If it returns
-                // Some(task), we spawn a background subagent via AgentTool so
-                // the spawn doesn't call run_query_loop recursively from within
-                // its own future (which would make the future !Send).
-                {
-                    let memory_dir = dirs::home_dir().map(|h| h.join(".claurst").join("memory"));
-                    let conversations_dir =
-                        dirs::home_dir().map(|h| h.join(".claurst").join("conversations"));
-                    if let (Some(mem), Some(conv)) = (memory_dir, conversations_dir) {
-                        let dreamer = crate::auto_dream::AutoDream::new(mem, conv);
-                        if let Ok(Some(task)) = dreamer.maybe_trigger().await {
-                            // Run the consolidation subagent in a background Tokio
-                            // task. We use the AgentTool execute path (via
-                            // poll_background_agent / BACKGROUND_AGENTS) to avoid
-                            // re-entering run_query_loop from within the same
-                            // future graph.
-                            let agent_input = serde_json::json!({
-                                "description": "memory consolidation",
-                                "prompt": task.prompt,
-                                "max_turns": 20,
-                                "system_prompt": "You are performing automatic memory consolidation. Complete the task and return a brief summary.",
-                                "run_in_background": true,
-                                "isolation": null
-                            });
-                            let ctx_for_dream = tool_ctx.clone();
-                            tokio::spawn(async move {
-                                let agent = crate::agent_tool::AgentTool;
-                                let _result = crate::tools::Tool::execute(
-                                    &agent,
-                                    agent_input,
-                                    &ctx_for_dream,
-                                )
-                                .await;
-                                crate::auto_dream::AutoDream::finish_consolidation(&task).await;
-                            });
-                        }
-                    }
-                }
+                // AutoDream consolidation was removed — skip.
 
                 // Attach snapshot patch covering all file changes this query.
-                if let (Some(ref snap), Some(ref hash)) = (&shadow_snap, &initial_snapshot) {
-                    let patch = snap.patch(hash).await;
-                    if !patch.files.is_empty() {
-                        assistant_msg.snapshot_patch = Some(patch);
-                    }
-                }
+                // (snapshot patch functionality was removed)
+                let _ = (&shadow_snap, &initial_snapshot);
 
                 return QueryOutcome::EndTurn {
                     message: assistant_msg,
@@ -1953,20 +1877,13 @@ pub async fn run_query_loop(
                         )
                         .await;
 
-                        let plugin_pre_outcome =
-                            crate::plugins::run_global_pre_tool_hook(&name, &input);
+                        // Plugin hooks were removed — skip.
 
                         let blocked_result =
                             if let crate::core::hooks::HookOutcome::Blocked(reason) = pre_outcome {
                                 warn!(tool = %name, reason = %reason, "PreToolUse hook blocked execution");
                                 Some(crate::tools::ToolResult::error(format!(
                                     "Blocked by hook: {}",
-                                    reason
-                                )))
-                            } else if let crate::plugins::HookOutcome::Deny(reason) = plugin_pre_outcome {
-                                warn!(tool = %name, reason = %reason, "Plugin PreToolUse hook blocked execution");
-                                Some(crate::tools::ToolResult::error(format!(
-                                    "Blocked by plugin hook: {}",
                                     reason
                                 )))
                             } else {
@@ -2027,12 +1944,7 @@ pub async fn run_query_loop(
                     )
                     .await;
 
-                    crate::plugins::run_global_post_tool_hook(
-                        &p.name,
-                        &p.input,
-                        &result.content,
-                        result.is_error,
-                    );
+                    // Plugin post-tool hook was removed — skip.
 
                     if let Some(ref tx) = event_tx {
                         let _ = tx.send(QueryEvent::ToolEnd {
@@ -2063,11 +1975,8 @@ pub async fn run_query_loop(
                     &tool_ctx.config,
                     tool_ctx.working_dir.clone(),
                 );
-                if let (Some(ref snap), Some(ref hash)) = (&shadow_snap, &initial_snapshot) {
-                    let patch = snap.patch(hash).await;
-                    if !patch.files.is_empty() {
-                        assistant_msg.snapshot_patch = Some(patch);
-                    }
+                if let (Some(_snap), Some(_hash)) = (&shadow_snap, &initial_snapshot) {
+                    // snapshot patch functionality was removed
                 }
                 return QueryOutcome::EndTurn {
                     message: assistant_msg,
@@ -2082,11 +1991,8 @@ pub async fn run_query_loop(
                     &tool_ctx.config,
                     tool_ctx.working_dir.clone(),
                 );
-                if let (Some(ref snap), Some(ref hash)) = (&shadow_snap, &initial_snapshot) {
-                    let patch = snap.patch(hash).await;
-                    if !patch.files.is_empty() {
-                        assistant_msg.snapshot_patch = Some(patch);
-                    }
+                if let (Some(_snap), Some(_hash)) = (&shadow_snap, &initial_snapshot) {
+                    // snapshot patch functionality was removed
                 }
                 return QueryOutcome::EndTurn {
                     message: assistant_msg,

@@ -18,7 +18,7 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::types::Message;
+use crate::core::types::Message;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -221,7 +221,7 @@ pub struct SessionSummary {
 
 /// Returns the base projects directory: `~/.claurst/projects/`.
 pub fn projects_dir() -> PathBuf {
-    crate::config::Settings::config_dir().join("projects")
+    crate::core::config::Settings::config_dir().join("projects")
 }
 
 /// Returns the per-project transcript directory.
@@ -253,7 +253,7 @@ pub fn transcript_path(project_root: &Path, session_id: &str) -> PathBuf {
 pub async fn write_transcript_entry(
     path: &Path,
     entry: &TranscriptEntry,
-) -> crate::Result<()> {
+) -> crate::core::error::Result<()> {
     // Guard: do not grow files beyond the cap.
     if let Ok(meta) = tokio::fs::metadata(path).await {
         if meta.len() >= MAX_TRANSCRIPT_BYTES {
@@ -289,11 +289,11 @@ pub async fn write_transcript_entry(
 ///   to protect against OOM.
 /// * Lines that fail to parse are silently skipped (forward-compatibility).
 /// * Any entry whose uuid appears in a `Tombstone` entry is excluded.
-pub async fn load_transcript(path: &Path) -> crate::Result<Vec<TranscriptEntry>> {
+pub async fn load_transcript(path: &Path) -> crate::core::error::Result<Vec<TranscriptEntry>> {
     // Fast-path: file absent → empty session.
     match tokio::fs::metadata(path).await {
         Ok(meta) if meta.len() > MAX_TRANSCRIPT_BYTES => {
-            return Err(crate::ClaudeError::Other(format!(
+            return Err(crate::core::error::ClaudeError::Other(format!(
                 "Transcript file too large to load ({} bytes, max {})",
                 meta.len(),
                 MAX_TRANSCRIPT_BYTES,
@@ -364,7 +364,7 @@ pub async fn load_transcript(path: &Path) -> crate::Result<Vec<TranscriptEntry>>
 ///
 /// For each file, a cheap tail-read extracts the `last-prompt` and
 /// `custom-title` metadata without loading the full transcript.
-pub async fn list_sessions(project_root: &Path) -> crate::Result<Vec<SessionSummary>> {
+pub async fn list_sessions(project_root: &Path) -> crate::core::error::Result<Vec<SessionSummary>> {
     let dir = transcript_dir(project_root);
 
     let mut dir_entries = match tokio::fs::read_dir(&dir).await {
@@ -421,7 +421,7 @@ pub async fn list_sessions(project_root: &Path) -> crate::Result<Vec<SessionSumm
 ///
 /// If the file exceeds [`MAX_TRANSCRIPT_BYTES`] the tombstone is not written
 /// (same guard as [`write_transcript_entry`]).
-pub async fn tombstone_entry(path: &Path, uuid: &str) -> crate::Result<()> {
+pub async fn tombstone_entry(path: &Path, uuid: &str) -> crate::core::error::Result<()> {
     let entry = TranscriptEntry::Tombstone(TombstoneEntry {
         deleted_uuid: uuid.to_string(),
     });
@@ -433,7 +433,7 @@ pub async fn tombstone_entry(path: &Path, uuid: &str) -> crate::Result<()> {
 ///
 /// Used by `/revert` to discard assistant turns after a given message.
 /// Rewrites the file atomically (load → filter → overwrite).
-pub async fn truncate_after(path: &Path, from_uuid: &str) -> crate::Result<()> {
+pub async fn truncate_after(path: &Path, from_uuid: &str) -> crate::core::error::Result<()> {
     let entries = load_transcript(path).await?;
     let mut keep = Vec::new();
     let mut found = false;
@@ -453,7 +453,7 @@ pub async fn truncate_after(path: &Path, from_uuid: &str) -> crate::Result<()> {
     // Rewrite the file with only the kept entries.
     let mut lines = String::new();
     for e in &keep {
-        lines.push_str(&serde_json::to_string(e).map_err(crate::error::ClaudeError::from)?);
+        lines.push_str(&serde_json::to_string(e).map_err(crate::core::error::ClaudeError::from)?);
         lines.push('\n');
     }
     tokio::fs::write(path, lines).await?;
@@ -638,7 +638,7 @@ pub fn filter_by_agent_role<'a>(entries: &'a [TranscriptEntry], role: &str) -> V
 mod tests {
     use super::*;
     use tempfile::tempdir;
-    use crate::types::{Message, MessageContent, Role};
+    use crate::core::types::{Message, MessageContent, Role};
 
     fn make_msg(role: Role) -> Message {
         Message {
