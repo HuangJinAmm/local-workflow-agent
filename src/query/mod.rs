@@ -1484,7 +1484,7 @@ pub async fn run_query_loop(
             continue;
         }
 
-        let (mut assistant_msg, usage, stop_reason) = accumulator.finish();
+        let (assistant_msg, usage, stop_reason) = accumulator.finish();
 
         // Track costs
         cost_tracker.add_usage(

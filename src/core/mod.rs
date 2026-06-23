@@ -3793,7 +3793,6 @@ pub use oauth::OAuthTokens;
 // ---------------------------------------------------------------------------
 // Additional modules
 // ---------------------------------------------------------------------------
-pub mod context_collapse;
 pub mod system_prompt;
 pub mod memdir;
 

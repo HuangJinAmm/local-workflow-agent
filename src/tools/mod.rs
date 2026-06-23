@@ -33,6 +33,7 @@ pub mod tasks;
 pub mod web_fetch;
 pub mod web_search;
 pub mod formatter;
+pub mod notebook_edit;
 
 // Re-exports for convenience.
 pub use formatter::try_format_file;

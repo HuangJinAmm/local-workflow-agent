@@ -462,34 +462,6 @@ pub mod client {
             self.config.use_bearer_auth
         }
 
-        /// First user (non-meta) message text — input to the `cc_version` client
-        /// hash. Mirrors the official `juA`: skips `<system-reminder>` blocks.
-        fn first_user_message_text(messages: &[ApiMessage]) -> String {
-            let is_meta = |s: &str| s.trim_start().starts_with("<system-reminder>");
-            for m in messages {
-                if m.role != "user" {
-                    continue;
-                }
-                match &m.content {
-                    serde_json::Value::String(s) if !is_meta(s) => return s.clone(),
-                    serde_json::Value::Array(blocks) => {
-                        for b in blocks {
-                            if b.get("type").and_then(|v| v.as_str()) != Some("text") {
-                                continue;
-                            }
-                            if let Some(text) = b.get("text").and_then(|v| v.as_str()) {
-                                if !is_meta(text) {
-                                    return text.to_string();
-                                }
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            String::new()
-        }
-
         /// OAuth stealth injection (removed — oauth_config module was deleted).
         fn apply_oauth_stealth(&self, _request: &mut CreateMessageRequest) {
             // No-op: oauth_config module was deleted during cleanup.
@@ -726,9 +698,8 @@ pub mod client {
             let session_id = self.session_id.clone();
 
             // Active OAuth account, fetched once and cached for the process
-            // lifetime. `account_uuid` -> `metadata.user_id`; `has_premium`
-            // selects the account-tier `anthropic-beta` set.
-            let (account_uuid, has_premium): (String, bool) = if use_oauth {
+            // lifetime. `account_uuid` -> `metadata.user_id`.
+            let account_uuid: String = if use_oauth {
                 use tokio::sync::OnceCell;
                 static CACHE: OnceCell<Option<(String, bool)>> = OnceCell::const_new();
                 CACHE
@@ -736,8 +707,9 @@ pub mod client {
                     .await
                     .clone()
                     .unwrap_or_default()
+                    .0
             } else {
-                (String::new(), false)
+                String::new()
             };
 
             // On the OAuth path, inject `metadata.user_id`. There is no `cch`
