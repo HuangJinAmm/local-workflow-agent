@@ -4,7 +4,7 @@
 // the goal objective has been fully achieved.  Calling it without a thorough
 // audit_summary + evidence is considered a violation of the goal contract.
 
-use crate::{PermissionLevel, Tool, ToolContext, ToolResult};
+use super::{PermissionLevel, Tool, ToolContext, ToolResult};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -71,9 +71,9 @@ impl Tool for GoalCompleteTool {
 
         let session_id = &ctx.session_id;
 
-        match claurst_core::GoalStore::open_default() {
+        match crate::core::GoalStore::open_default() {
             None => ToolResult::error("Could not open goal store.".to_string()),
-            Some(store) => match store.set_status(session_id, claurst_core::GoalStatus::Complete) {
+            Some(store) => match store.set_status(session_id, crate::core::GoalStatus::Complete) {
                 Ok(()) => ToolResult::success(format!(
                     "Goal marked complete.\n\nAudit summary: {}\n\nEvidence: {}",
                     params.audit_summary, params.evidence,

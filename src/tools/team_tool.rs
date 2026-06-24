@@ -18,7 +18,7 @@
 //
 // This keeps the module self-contained and avoids any extra crate boundary.
 
-use crate::{PermissionLevel, Tool, ToolContext, ToolResult};
+use super::{PermissionLevel, Tool, ToolContext, ToolResult};
 use async_trait::async_trait;
 use futures::future::join_all;
 use once_cell::sync::OnceCell;

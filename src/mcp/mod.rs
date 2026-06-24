@@ -1368,22 +1368,22 @@ mod tests {
 
     #[test]
     fn test_expand_env_vars_known_var() {
-        std::env::set_var("_CC_TEST_VAR", "rustacean");
+        unsafe { std::env::set_var("_CC_TEST_VAR", "rustacean"); }
         let out = expand_env_vars("hello ${_CC_TEST_VAR}!");
         assert_eq!(out, "hello rustacean!");
-        std::env::remove_var("_CC_TEST_VAR");
+        unsafe { std::env::remove_var("_CC_TEST_VAR"); }
     }
 
     #[test]
     fn test_expand_env_vars_default_value() {
-        std::env::remove_var("_CC_MISSING_VAR");
+        unsafe { std::env::remove_var("_CC_MISSING_VAR"); }
         let out = expand_env_vars("val=${_CC_MISSING_VAR:-fallback}");
         assert_eq!(out, "val=fallback");
     }
 
     #[test]
     fn test_expand_env_vars_missing_no_default() {
-        std::env::remove_var("_CC_REALLY_MISSING");
+        unsafe { std::env::remove_var("_CC_REALLY_MISSING"); }
         // Missing with no default → keep original
         let out = expand_env_vars("${_CC_REALLY_MISSING}");
         assert_eq!(out, "${_CC_REALLY_MISSING}");
@@ -1391,17 +1391,17 @@ mod tests {
 
     #[test]
     fn test_expand_env_vars_multiple() {
-        std::env::set_var("_CC_A", "foo");
-        std::env::set_var("_CC_B", "bar");
+        unsafe { std::env::set_var("_CC_A", "foo"); }
+        unsafe { std::env::set_var("_CC_B", "bar"); }
         let out = expand_env_vars("${_CC_A}/${_CC_B}");
         assert_eq!(out, "foo/bar");
-        std::env::remove_var("_CC_A");
-        std::env::remove_var("_CC_B");
+        unsafe { std::env::remove_var("_CC_A"); }
+        unsafe { std::env::remove_var("_CC_B"); }
     }
 
     #[test]
     fn test_expand_server_config() {
-        std::env::set_var("_CC_TEST_HOME", "/home/user");
+        unsafe { std::env::set_var("_CC_TEST_HOME", "/home/user"); }
         let cfg = McpServerConfig {
             name: "test".to_string(),
             command: Some("${_CC_TEST_HOME}/bin/server".to_string()),
@@ -1418,7 +1418,7 @@ mod tests {
         assert_eq!(expanded.command.as_deref(), Some("/home/user/bin/server"));
         assert_eq!(expanded.args[1], "/home/user");
         assert_eq!(expanded.env.get("PATH").map(|s| s.as_str()), Some("/home/user/bin"));
-        std::env::remove_var("_CC_TEST_HOME");
+        unsafe { std::env::remove_var("_CC_TEST_HOME"); }
     }
 
     // ---- JSON-RPC -----------------------------------------------------------
@@ -1724,13 +1724,13 @@ mod transport_tests {
 
     #[test]
     fn test_is_unsupported_protocol_error_matches_rmcp_variants() {
-        assert!(crate::McpClient::is_unsupported_protocol_error(
+        assert!(super::McpClient::is_unsupported_protocol_error(
             "unsupported protocol version: 2025-11-25"
         ));
-        assert!(crate::McpClient::is_unsupported_protocol_error(
+        assert!(super::McpClient::is_unsupported_protocol_error(
             "Bad Request: Unsupported MCP-Protocol-Version: 2025-11-25"
         ));
-        assert!(!crate::McpClient::is_unsupported_protocol_error("connection reset by peer"));
+        assert!(!super::McpClient::is_unsupported_protocol_error("connection reset by peer"));
     }
 
 }

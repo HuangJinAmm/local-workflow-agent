@@ -5,9 +5,9 @@
 // tasks, checking the status or output of a specific task, and cancelling a
 // running task.
 
-use crate::{PermissionLevel, Tool, ToolContext, ToolResult};
+use super::{PermissionLevel, Tool, ToolContext, ToolResult};
 use async_trait::async_trait;
-use claurst_core::tasks::{global_registry, TaskStatus};
+use crate::core::tasks::{global_registry, TaskStatus};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -244,24 +244,25 @@ mod tests {
     }
 
     fn make_test_ctx() -> ToolContext {
-        use claurst_core::config::Config;
-        use claurst_core::permissions::AutoPermissionHandler;
+        use crate::core::config::Config;
+        use crate::core::permissions::AutoPermissionHandler;
         use std::path::PathBuf;
         use std::sync::Arc;
         use std::sync::atomic::AtomicUsize;
 
         let handler = Arc::new(AutoPermissionHandler {
-            mode: claurst_core::config::PermissionMode::Default,
+            mode: crate::core::config::PermissionMode::Default,
         });
         ToolContext {
             working_dir: PathBuf::from("."),
-            permission_mode: claurst_core::config::PermissionMode::Default,
+            permission_mode: crate::core::config::PermissionMode::Default,
             permission_handler: handler,
-            cost_tracker: claurst_core::cost::CostTracker::new(),
+            cost_tracker: crate::core::cost::CostTracker::new(),
             session_id: "test-monitor".to_string(),
             file_history: Arc::new(parking_lot::Mutex::new(
-                claurst_core::file_history::FileHistory::new(),
+                crate::core::file_history::FileHistory::new(),
             )),
+            lsp_manager: None,
             current_turn: Arc::new(AtomicUsize::new(0)),
             non_interactive: true,
             mcp_manager: None,

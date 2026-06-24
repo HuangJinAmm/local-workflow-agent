@@ -10,7 +10,7 @@
 //                  text?, direction?, amount? }
 //   - Output:    text description of the action; screenshots return base64 JPEG.
 
-use crate::{PermissionLevel, Tool, ToolContext, ToolResult};
+use super::{PermissionLevel, Tool, ToolContext, ToolResult};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -153,10 +153,10 @@ impl Tool for ComputerUseTool {
 
     /// Override `to_definition` to emit the Anthropic computer-use-specific
     /// format with `type` and display dimensions.
-    fn to_definition(&self) -> claurst_core::types::ToolDefinition {
+    fn to_definition(&self) -> crate::core::ToolDefinition {
         // The computer tool uses a special schema form that includes display dims.
         // We encode them in the description field which is what the API sends.
-        claurst_core::types::ToolDefinition {
+        crate::core::ToolDefinition {
             name: self.name().to_string(),
             description: self.description().to_string(),
             input_schema: self.input_schema(),

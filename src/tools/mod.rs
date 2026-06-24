@@ -34,6 +34,17 @@ pub mod web_fetch;
 pub mod web_search;
 pub mod formatter;
 pub mod notebook_edit;
+pub mod repl_tool;
+pub mod brief;
+pub mod bundled_skills;
+pub mod computer_use;
+pub mod cron;
+pub mod goal_complete;
+pub mod lsp_tool;
+pub mod monitor_tool;
+pub mod send_message;
+pub mod team_tool;
+pub mod tool_search;
 
 // Re-exports for convenience.
 pub use formatter::try_format_file;
@@ -233,6 +244,8 @@ pub struct ToolContext {
     pub cost_tracker: Arc<CostTracker>,
     pub session_id: String,
     pub current_turn: Arc<AtomicUsize>,
+    pub file_history: Arc<parking_lot::Mutex<crate::core::file_history::FileHistory>>,
+    pub lsp_manager: Option<Arc<crate::core::lsp::LspManager>>,
     /// If true, suppress interactive prompts (batch / CI mode).
     pub non_interactive: bool,
     /// Optional MCP manager for ListMcpResources / ReadMcpResource tools.
@@ -543,6 +556,10 @@ mod tests {
             current_turn: Arc::new(AtomicUsize::new(0)),
             non_interactive: true,
             mcp_manager: None,
+            file_history: Arc::new(parking_lot::Mutex::new(
+                crate::core::file_history::FileHistory::new(),
+            )),
+            lsp_manager: None,
             config: Config::default(),
             managed_agent_config: None,
             completion_notifier: None,

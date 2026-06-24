@@ -37,6 +37,16 @@ pub mod message_utils;
 // MCP resource prompt template rendering with variable substitution.
 pub mod mcp_templates;
 
+// LSP server integration.
+pub mod lsp;
+
+pub mod file_history;
+
+
+
+pub mod goal;
+pub use goal::{Goal, GoalStatus, GoalError, GoalStore,};
+
 // Re-export commonly used types at the crate root
 pub use error::{ClaudeError, Result};
 pub use types::{
@@ -559,6 +569,8 @@ pub mod config {
     use std::collections::HashMap;
     use std::path::PathBuf;
 
+use crate::core::lsp::LspServerConfig;
+
     // ---- Hook configuration ----------------------------------------------
 
     /// Events that can trigger hooks.
@@ -893,7 +905,7 @@ pub mod config {
         pub output_format: OutputFormat,
         pub mcp_servers: Vec<McpServerConfig>,
         #[serde(default)]
-        pub lsp_servers: Vec<serde_json::Value>,
+        pub lsp_servers: Vec<LspServerConfig>,
         pub allowed_tools: Vec<String>,
         pub disallowed_tools: Vec<String>,
         pub env: HashMap<String, String>,
@@ -902,6 +914,7 @@ pub mod config {
         pub append_system_prompt: Option<String>,
         pub disable_claude_mds: bool,
         pub project_dir: Option<PathBuf>,
+        pub lsp_server: Option<LspServerConfig>,
         #[serde(default)]
         pub workspace_paths: Vec<PathBuf>,
         /// Additional directories granted access via --add-dir.
@@ -1600,6 +1613,7 @@ pub mod config {
                 api_key: over.config.api_key.or(base.config.api_key),
                 model: over.config.model.or(base.config.model),
                 max_tokens: over.config.max_tokens.or(base.config.max_tokens),
+                lsp_server: over.config.lsp_server.or(base.config.lsp_server),
                 permission_mode: over.config.permission_mode,
                 theme: over.config.theme,
                 output_style: over.config.output_style.or(base.config.output_style),
@@ -4085,14 +4099,14 @@ mod tests {
         // When config.api_key is set, it should be returned regardless of env var
         // (Config key takes priority — resolve_api_key returns it first)
         let orig = std::env::var("ANTHROPIC_API_KEY").ok();
-        std::env::remove_var("ANTHROPIC_API_KEY");
+        unsafe { std::env::remove_var("ANTHROPIC_API_KEY"); }
 
         let mut cfg = crate::core::config::Config::default();
         cfg.api_key = Some("sk-ant-config-key".to_string());
         assert_eq!(cfg.resolve_api_key(), Some("sk-ant-config-key".to_string()));
 
         if let Some(k) = orig {
-            std::env::set_var("ANTHROPIC_API_KEY", k);
+            unsafe { std::env::set_var("ANTHROPIC_API_KEY", k); }
         }
     }
 
@@ -4100,29 +4114,29 @@ mod tests {
     fn test_config_resolve_api_key_none() {
         // Temporarily ensure no env var override
         let orig = std::env::var("ANTHROPIC_API_KEY").ok();
-        std::env::remove_var("ANTHROPIC_API_KEY");
+        unsafe { std::env::remove_var("ANTHROPIC_API_KEY"); }
 
         let cfg = crate::core::config::Config::default();
         assert!(cfg.resolve_api_key().is_none());
 
         // Restore
         if let Some(k) = orig {
-            std::env::set_var("ANTHROPIC_API_KEY", k);
+            unsafe { std::env::set_var("ANTHROPIC_API_KEY", k); }
         }
     }
 
     #[test]
     fn test_config_resolve_api_key_from_env() {
         let orig = std::env::var("ANTHROPIC_API_KEY").ok();
-        std::env::set_var("ANTHROPIC_API_KEY", "sk-ant-env-key");
+        unsafe { std::env::set_var("ANTHROPIC_API_KEY", "sk-ant-env-key"); }
 
         let cfg = crate::core::config::Config::default();
         assert_eq!(cfg.resolve_api_key(), Some("sk-ant-env-key".to_string()));
 
         // Restore
-        std::env::remove_var("ANTHROPIC_API_KEY");
+        unsafe { std::env::remove_var("ANTHROPIC_API_KEY"); }
         if let Some(k) = orig {
-            std::env::set_var("ANTHROPIC_API_KEY", k);
+            unsafe { std::env::set_var("ANTHROPIC_API_KEY", k); }
         }
     }
 

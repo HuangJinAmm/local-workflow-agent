@@ -12,7 +12,7 @@
 // global registry.  Code is injected over stdin; a known sentinel string is
 // printed after each block so we know when output is complete.
 
-use crate::{PermissionLevel, Tool, ToolContext, ToolResult};
+use super::{PermissionLevel, Tool, ToolContext, ToolResult};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use once_cell::sync::Lazy;

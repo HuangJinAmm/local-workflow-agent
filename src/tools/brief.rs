@@ -8,7 +8,7 @@
 //   "normal"    – reply to what the user just said
 //   "proactive" – unsolicited update (task done, blocker, status ping)
 
-use crate::{PermissionLevel, Tool, ToolContext, ToolResult};
+use super::{PermissionLevel, Tool, ToolContext, ToolResult};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};

@@ -1,1 +1,194 @@
-{}
+{
+  "anthropic": {
+    "id": "anthropic",
+    "name": "Anthropic",
+    "env": ["ANTHROPIC_API_KEY"],
+    "api": "https://api.anthropic.com",
+    "doc": "https://docs.anthropic.com",
+    "models": {
+      "claude-sonnet-4-6": {
+        "id": "claude-sonnet-4-6",
+        "name": "Claude Sonnet 4.6",
+        "family": "claude",
+        "status": "active",
+        "tool_call": true,
+        "reasoning": true,
+        "structured_output": true,
+        "modalities": {
+          "input": ["text", "image"],
+          "output": ["text"]
+        },
+        "cost": {
+          "input": 3.0,
+          "output": 15.0
+        },
+        "limit": {
+          "context": 200000,
+          "output": 64000
+        }
+      },
+      "claude-opus-4-6": {
+        "id": "claude-opus-4-6",
+        "name": "Claude Opus 4.6",
+        "family": "claude",
+        "status": "active",
+        "tool_call": true,
+        "reasoning": true,
+        "structured_output": true,
+        "modalities": {
+          "input": ["text", "image"],
+          "output": ["text"]
+        },
+        "cost": {
+          "input": 15.0,
+          "output": 75.0
+        },
+        "limit": {
+          "context": 200000,
+          "output": 32000
+        }
+      }
+    }
+  },
+  "openai": {
+    "id": "openai",
+    "name": "OpenAI",
+    "env": ["OPENAI_API_KEY"],
+    "api": "https://api.openai.com/v1",
+    "doc": "https://platform.openai.com/docs",
+    "models": {
+      "gpt-4o": {
+        "id": "gpt-4o",
+        "name": "GPT-4o",
+        "family": "gpt-4o",
+        "status": "active",
+        "tool_call": true,
+        "reasoning": false,
+        "structured_output": true,
+        "modalities": {
+          "input": ["text", "image"],
+          "output": ["text"]
+        },
+        "cost": {
+          "input": 2.5,
+          "output": 10.0
+        },
+        "limit": {
+          "context": 128000,
+          "output": 16384
+        }
+      },
+      "gpt-5.2": {
+        "id": "gpt-5.2",
+        "name": "GPT-5.2",
+        "family": "gpt-5",
+        "status": "active",
+        "tool_call": true,
+        "reasoning": true,
+        "structured_output": true,
+        "modalities": {
+          "input": ["text", "image"],
+          "output": ["text"]
+        },
+        "cost": {
+          "input": 5.0,
+          "output": 20.0
+        },
+        "limit": {
+          "context": 200000,
+          "output": 16384
+        }
+      }
+    }
+  },
+  "google": {
+    "id": "google",
+    "name": "Google",
+    "env": ["GOOGLE_API_KEY", "GEMINI_API_KEY"],
+    "api": "https://generativelanguage.googleapis.com/v1beta",
+    "doc": "https://ai.google.dev/docs",
+    "models": {
+      "gemini-2.5-pro": {
+        "id": "gemini-2.5-pro",
+        "name": "Gemini 2.5 Pro",
+        "family": "gemini",
+        "status": "active",
+        "tool_call": true,
+        "reasoning": true,
+        "structured_output": true,
+        "modalities": {
+          "input": ["text", "image"],
+          "output": ["text"]
+        },
+        "cost": {
+          "input": 1.25,
+          "output": 5.0
+        },
+        "limit": {
+          "context": 2000000,
+          "output": 8192
+        }
+      }
+    }
+  },
+  "openrouter": {
+    "id": "openrouter",
+    "name": "OpenRouter",
+    "env": ["OPENROUTER_API_KEY"],
+    "api": "https://openrouter.ai/api/v1",
+    "doc": "https://openrouter.ai/docs",
+    "models": {
+      "anthropic/claude-sonnet-4": {
+        "id": "anthropic/claude-sonnet-4",
+        "name": "Claude Sonnet 4 (OpenRouter)",
+        "family": "claude",
+        "status": "active",
+        "tool_call": true,
+        "reasoning": true,
+        "structured_output": true,
+        "modalities": {
+          "input": ["text", "image"],
+          "output": ["text"]
+        },
+        "cost": {
+          "input": 3.0,
+          "output": 15.0
+        },
+        "limit": {
+          "context": 200000,
+          "output": 64000
+        }
+      }
+    }
+  },
+  "groq": {
+    "id": "groq",
+    "name": "Groq",
+    "env": ["GROQ_API_KEY"],
+    "api": "https://api.groq.com/openai/v1",
+    "doc": "https://console.groq.com/docs",
+    "models": {
+      "llama-3.3-70b-versatile": {
+        "id": "llama-3.3-70b-versatile",
+        "name": "Llama 3.3 70B Versatile",
+        "family": "llama",
+        "status": "active",
+        "tool_call": true,
+        "reasoning": false,
+        "structured_output": true,
+        "modalities": {
+          "input": ["text"],
+          "output": ["text"]
+        },
+        "cost": {
+          "input": 0.59,
+          "output": 0.79
+        },
+        "limit": {
+          "context": 128000,
+          "output": 32768
+        }
+      }
+    }
+  }
+}

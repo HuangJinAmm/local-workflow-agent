@@ -1190,7 +1190,7 @@ pub fn collapse_search_results(messages: Vec<crate::core::types::Message>) -> Ve
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::{Message, Role};
+    use crate::core::types::Message;
 
     fn make_user(text: &str) -> Message {
         Message::user(text)

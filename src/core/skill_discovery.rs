@@ -365,7 +365,7 @@ mod tests {
         std::fs::create_dir_all(&skills_dir).unwrap();
         write_file(&skills_dir, "myskill.md", "---\nname: myskill\ndescription: Test\n---\nDo it.");
 
-        let config = crate::config::SkillsConfig::default();
+        let config = crate::core::config::SkillsConfig::default();
         let discovered = discover_skills(tmp.path(), &config);
         assert!(discovered.contains_key("myskill"));
         assert_eq!(discovered["myskill"].description, "Test");
@@ -377,7 +377,7 @@ mod tests {
         let extra = make_temp_dir();
         write_file(extra.path(), "extra.md", "---\nname: extra\n---\nExtra skill.");
 
-        let config = crate::config::SkillsConfig {
+        let config = crate::core::config::SkillsConfig {
             paths: vec![extra.path().to_str().unwrap().to_string()],
             urls: vec![],
         };
@@ -395,7 +395,7 @@ mod tests {
         let extra = make_temp_dir();
         write_file(extra.path(), "dup.md", "---\nname: dup\ndescription: extra\n---\nExtra.");
 
-        let config = crate::config::SkillsConfig {
+        let config = crate::core::config::SkillsConfig {
             paths: vec![extra.path().to_str().unwrap().to_string()],
             urls: vec![],
         };

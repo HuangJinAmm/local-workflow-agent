@@ -7,7 +7,7 @@
 // Messages are stored keyed by recipient name. Other agents can check
 // their inbox by calling drain_inbox() or peek_inbox().
 
-use crate::{PermissionLevel, Tool, ToolContext, ToolResult};
+use super::{PermissionLevel, Tool, ToolContext, ToolResult};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use once_cell::sync::Lazy;

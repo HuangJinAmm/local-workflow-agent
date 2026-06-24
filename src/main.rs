@@ -18,6 +18,7 @@ use local_workflow_agent::core::constants::{
     ANTHROPIC_API_BASE, ANTHROPIC_API_VERSION, ANTHROPIC_BETA_HEADER, DEFAULT_MAX_TOKENS,
     DEFAULT_MODEL,
 };
+use local_workflow_agent::core::file_history::FileHistory;
 use local_workflow_agent::core::permissions::{AutoPermissionHandler, PermissionHandler};
 use local_workflow_agent::core::cost::CostTracker;
 use local_workflow_agent::tools::{
@@ -285,6 +286,8 @@ fn build_tool_context(working_dir: PathBuf) -> ToolContext {
         current_turn: Arc::new(AtomicUsize::new(0)),
         non_interactive: true,
         mcp_manager: None,
+        lsp_manager: None,
+        file_history: Arc::new(parking_lot::Mutex::new(FileHistory::new())),
         config: Config::default(),
         managed_agent_config: None,
         completion_notifier: None,
