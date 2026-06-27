@@ -2,3 +2,4 @@
 #![cfg(feature = "gui")]
 
 pub mod model;
+pub mod storage;
