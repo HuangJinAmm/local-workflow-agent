@@ -120,6 +120,45 @@ impl MessageStore {
         self.conn.execute("DELETE FROM ui_message WHERE session_id = ?1", [session_id])?;
         Ok(())
     }
+
+    pub fn add_attachment_ref(
+        &self,
+        attachment_id: &str,
+        message_id: &str,
+        ordinal: i32,
+        local_path: &Path,
+    ) -> anyhow::Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO ui_attachment_ref
+             (attachment_id, message_id, ordinal, local_path) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![
+                attachment_id,
+                message_id,
+                ordinal,
+                local_path.to_string_lossy().to_string()
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn sweep_attachments(&self, dir: &Path) -> anyhow::Result<usize> {
+        let mut stmt = self.conn.prepare("SELECT local_path FROM ui_attachment_ref")?;
+        let kept: std::collections::HashSet<String> = stmt
+            .query_map([], |r| r.get::<_, String>(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+        let mut removed = 0;
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            let p = entry.path();
+            if !kept.contains(p.to_string_lossy().as_ref()) {
+                if std::fs::remove_file(&p).is_ok() {
+                    removed += 1;
+                }
+            }
+        }
+        Ok(removed)
+    }
 }
 
 fn encode_block(k: &BlockKind) -> anyhow::Result<(&'static str, Vec<u8>)> {
