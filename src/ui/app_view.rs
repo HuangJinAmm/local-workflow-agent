@@ -4,6 +4,7 @@ use gpui::*;
 use gpui_component::*;
 
 use super::app::AppState;
+use super::session::session_list::SessionListView;
 
 pub struct AppView {
     state: Entity<AppState>,
@@ -17,6 +18,8 @@ impl AppView {
 
 impl Render for AppView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let storage = self.state.read(cx).storage.clone();
+        let session_list = cx.new(|_| SessionListView::new(storage));
         let theme = cx.global::<Theme>();
         div()
             .v_flex()
@@ -25,13 +28,7 @@ impl Render for AppView {
             .child(
                 h_flex()
                     .flex_1()
-                    .child(
-                        div()
-                            .w(px(280.))
-                            .h_full()
-                            .bg(theme.muted)
-                            .child("Sessions (left)"),
-                    )
+                    .child(session_list)
                     .child(div().flex_1().h_full().child("Chat (middle)"))
                     .child(
                         div()
