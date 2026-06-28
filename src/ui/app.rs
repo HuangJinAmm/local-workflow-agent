@@ -26,13 +26,17 @@ pub struct AppState {
     pub settings: Arc<RwLock<Settings>>,
     pub inflight: Arc<RwLock<HashMap<SessionId, CancellationToken>>>,
     pub attachments_dir: PathBuf,
+    /// Reserved for future bash-cwd scoping; not read yet.
+    pub working_dir: PathBuf,
 }
 
 impl AppState {
     pub fn new(working_dir: PathBuf) -> anyhow::Result<Self> {
+        Self::with_data_dir(working_dir, default_data_dir())
+    }
+
+    pub fn with_data_dir(working_dir: PathBuf, data_dir: PathBuf) -> anyhow::Result<Self> {
         let runtime = Runtime::new()?;
-        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-        let data_dir = home.join(".local-workflow-agent");
         std::fs::create_dir_all(&data_dir)?;
         let attachments_dir = data_dir.join("attachments");
         std::fs::create_dir_all(&attachments_dir)?;
@@ -59,6 +63,7 @@ impl AppState {
             settings,
             inflight: Arc::new(RwLock::new(HashMap::new())),
             attachments_dir,
+            working_dir,
         })
     }
 
@@ -73,4 +78,13 @@ impl AppState {
         self.inflight.write().insert(session_id, token.clone());
         token
     }
+}
+
+/// Resolve the default data directory. Honours `LWA_DATA_DIR` for tests / sandboxes.
+fn default_data_dir() -> PathBuf {
+    if let Ok(p) = std::env::var("LWA_DATA_DIR") {
+        return PathBuf::from(p);
+    }
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    home.join(".local-workflow-agent")
 }
