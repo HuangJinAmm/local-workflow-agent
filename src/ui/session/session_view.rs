@@ -61,6 +61,75 @@ impl SessionView {
         self.phase == Phase::Streaming
     }
 
+    /// Load a session's persisted history into the in-memory message
+    /// list. Any in-flight turn is cancelled and the input bar is
+    /// cleared. Errors reading the store are logged and leave the
+    /// in-memory state untouched (so a transient SQLite error doesn't
+    /// wipe the user's view).
+    pub fn load_session(&mut self, session_id: String, cx: &mut Context<Self>) {
+        if self.phase == Phase::Streaming {
+            if let Some(token) = self.cancel_token.take() {
+                token.cancel();
+            }
+            self.phase = Phase::Idle;
+        }
+        self.session_id = Some(session_id.clone());
+        let storage = self.state.read(cx).storage.clone();
+        match storage.list_messages(&session_id) {
+            Ok(stored) => {
+                self.messages = stored
+                    .into_iter()
+                    .enumerate()
+                    .map(|(idx, m)| {
+                        let role = match m.role.as_str() {
+                            "user" => Role::User,
+                            "assistant" => Role::Assistant,
+                            _ => Role::ToolResult,
+                        };
+                        let created_at = chrono::DateTime::parse_from_rfc3339(&m.created_at)
+                            .map(|dt| dt.timestamp_millis())
+                            .unwrap_or_else(|_| chrono::Utc::now().timestamp_millis());
+                        let msg = UiMessage {
+                            id: m.id.clone(),
+                            session_id: session_id.clone(),
+                            role,
+                            created_at,
+                            ordinal: idx as i32,
+                        };
+                        let block = UiBlock {
+                            id: format!("{}-block-0", m.id),
+                            message_id: m.id.clone(),
+                            ordinal: 0,
+                            kind: BlockKind::Text { text: m.content },
+                        };
+                        RenderedMessage {
+                            msg,
+                            blocks: vec![block],
+                        }
+                    })
+                    .collect();
+                tracing::info!(session_id, count = self.messages.len(), "loaded session");
+            }
+            Err(e) => {
+                tracing::warn!(?e, session_id, "load_session: list_messages failed");
+            }
+        }
+        cx.notify();
+    }
+
+    /// Create a brand-new session, persist an empty record, and load it
+    /// into the view. Returns the new session id.
+    pub fn new_session(&mut self, cx: &mut Context<Self>) -> String {
+        let new_id = uuid::Uuid::new_v4().to_string();
+        let model = self.state.read(cx).settings.read().default_model.clone();
+        let storage = self.state.read(cx).storage.clone();
+        if let Err(e) = storage.save_session(&new_id, Some("New chat"), &model) {
+            tracing::warn!(?e, "new_session: save_session failed");
+        }
+        self.load_session(new_id.clone(), cx);
+        new_id
+    }
+
     /// Append a new user message and kick off a turn.
     ///
     /// `text` and `pending` come from the `InputBar`; the bar already

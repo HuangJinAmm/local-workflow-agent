@@ -160,6 +160,41 @@ impl SqliteSessionStore {
         )?;
         Ok(())
     }
+
+    /// Return every message for the given session, oldest first.
+    /// `content` is the persisted body string (whatever the caller stored
+    /// in `save_message`); the UI flattens it back into a single Text
+    /// block for display.
+    pub fn list_messages(
+        &self,
+        session_id: &str,
+    ) -> anyhow::Result<Vec<StoredMessage>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, role, content, created_at
+             FROM messages
+             WHERE session_id = ?1
+             ORDER BY created_at ASC, rowid ASC",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![session_id], |row| {
+            Ok(StoredMessage {
+                id: row.get(0)?,
+                role: row.get(1)?,
+                content: row.get(2)?,
+                created_at: row.get(3)?,
+            })
+        })?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+}
+
+/// A persisted message. `created_at` is the same RFC3339 string we
+/// stored; the UI parses it back into a Unix-ms integer for `UiMessage`.
+#[derive(Debug, Clone)]
+pub struct StoredMessage {
+    pub id: String,
+    pub role: String,
+    pub content: String,
+    pub created_at: String,
 }
 
 /// Summary row returned by `list_sessions` and `search_sessions`.
