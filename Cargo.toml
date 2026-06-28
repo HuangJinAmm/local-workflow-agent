@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-gui = ["dep:gpui", "dep:gpui-component"]
+gui = ["dep:gpui", "dep:gpui-component", "dep:rfd"]
 default = []
 
 [dependencies]

@@ -1,32 +1,58 @@
 // ui::input::input_bar — bottom-of-pane input.
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::{h_flex, Theme};
 
-// NOTE: gpui-component 0.5.1 has no `TextInput`. The text-input element is
-// `Input`, and it requires an `Entity<InputState>` constructed with
-// `&mut Window` — wiring it up cleanly is left for a later task. For now we
-// render a plain div that mimics the shape of the bar (input area + Send
-// button). TODO(Task 16 follow-up): replace this div with `Input::new(&state)`.
+use super::attachments::ingest_paths;
+use crate::ui::app::AppState;
+use crate::ui::model::Attachment;
 
 pub struct InputBar {
     pub text: String,
+    pub state: Entity<AppState>,
+    pub pending: Vec<Attachment>,
 }
 
 impl InputBar {
-    pub fn new() -> Self { Self { text: String::new() } }
+    pub fn new(state: Entity<AppState>) -> Self {
+        Self { text: String::new(), state, pending: vec![] }
+    }
 }
 
 impl Render for InputBar {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.global::<Theme>();
+        let att_dir = self.state.read(cx).attachments_dir.clone();
         h_flex()
             .w_full()
             .p_2()
             .gap_2()
             .bg(theme.muted)
             .items_center()
+            .child(
+                Button::new("attach")
+                    .label("📎")
+                    .on_click(move |_, window, cx| {
+                        let att_dir = att_dir.clone();
+                        let picker = rfd::FileDialog::new().pick_files();
+                        window
+                            .spawn(&*cx, async move |_async_cx| {
+                                if let Some(paths) = picker {
+                                    match ingest_paths(paths, &att_dir) {
+                                        Ok(atts) => {
+                                            tracing::info!(count = atts.len(), "picked attachments");
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!(?e, "attachment ingest failed");
+                                        }
+                                    }
+                                }
+                            })
+                            .detach();
+                    }),
+            )
             .child(
                 div()
                     .flex_1()

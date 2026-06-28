@@ -21,7 +21,10 @@ impl Render for AppView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let storage = self.state.read(cx).storage.clone();
         let session_list = cx.new(|_| SessionListView::new(storage));
-        let session_view = cx.new(|_| SessionView);
+        let session_view = cx.new({
+            let state = self.state.clone();
+            move |_| SessionView::new(state)
+        });
         let theme = cx.global::<Theme>();
         div()
             .v_flex()
