@@ -11,9 +11,8 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
+use crate::api::provider::LlmProvider;
 use crate::api::provider_types::{ProviderRequest, StreamEvent as PStream};
-use crate::api::registry::ProviderRegistry;
-use crate::core::provider_id::ProviderId;
 use crate::core::types::{
     ContentBlock, DocumentSource, ImageSource, Message, MessageContent, Role,
 };
@@ -37,37 +36,13 @@ pub enum TurnEvent {
 }
 
 pub async fn run_turn(
-    providers: &ProviderRegistry,
+    provider: Arc<dyn LlmProvider>,
     session_id: SessionId,
     request: ProviderRequest,
     sink: EventSink,
     cancel: CancellationToken,
 ) {
     debug!(?session_id, model = %request.model, "turn starting");
-
-    // Pick the provider that owns this model. We currently treat the model
-    // name as a ProviderId — that works for the canonical "anthropic"/"openai"
-    // names but is a placeholder for arbitrary model aliases. A follow-up
-    // task can switch to settings-driven provider selection.
-    let provider_id = ProviderId::new(request.model.clone());
-    let provider = match providers.get(&provider_id) {
-        Some(p) => Arc::clone(p),
-        None => match providers.default_provider() {
-            Some(p) => Arc::clone(p),
-            None => {
-                let _ = sink
-                    .send(TurnEvent::Failed {
-                        message: format!(
-                            "no provider registered (model='{}' or default)",
-                            request.model
-                        ),
-                        retryable: false,
-                    })
-                    .await;
-                return;
-            }
-        },
-    };
 
     let mut stream = match provider.create_message_stream(request).await {
         Ok(s) => s,

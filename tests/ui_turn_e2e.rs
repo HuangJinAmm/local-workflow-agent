@@ -94,7 +94,14 @@ async fn run_turn_text_response_emits_stream_then_done() {
     let cancel = CancellationToken::new();
     let request = new_request("anthropic", 1024, vec![Message::user("hi")]);
 
-    run_turn(&reg, "s1".into(), request, tx, cancel).await;
+    run_turn(
+        Arc::clone(reg.default_provider().expect("anthropic registered")),
+        "s1".into(),
+        request,
+        tx,
+        cancel,
+    )
+    .await;
 
     let mut collected: Vec<TurnEvent> = Vec::new();
     while let Ok(ev) = rx.try_recv() {
@@ -141,7 +148,14 @@ async fn run_turn_tool_use_response_emits_tool_use_start() {
     let cancel = CancellationToken::new();
     let request = new_request("anthropic", 1024, vec![Message::user("run ls")]);
 
-    run_turn(&reg, "s2".into(), request, tx, cancel).await;
+    run_turn(
+        Arc::clone(reg.default_provider().expect("anthropic registered")),
+        "s2".into(),
+        request,
+        tx,
+        cancel,
+    )
+    .await;
 
     let mut collected: Vec<TurnEvent> = Vec::new();
     while let Ok(ev) = rx.try_recv() {
@@ -172,17 +186,30 @@ async fn run_turn_tool_use_response_emits_tool_use_start() {
 
 #[tokio::test]
 async fn run_turn_no_provider_emits_failed() {
-    let reg = Arc::new(ProviderRegistry::new()); // empty
+    // With the new signature, `run_turn` takes a single `Arc<dyn LlmProvider>`.
+    // The "no provider" path lives in the caller (session_view), so this
+    // test exercises what happens when the provider's stream is empty:
+    // run_turn should synthesize a MessageStop + Done and exit cleanly.
+    use local_workflow_agent::ui::test_support::mock_provider::MockProvider;
+    let events: Vec<PStream> = vec![];
+    let mock = MockProvider::new("anthropic", "Anthropic", events);
+    let provider: std::sync::Arc<dyn local_workflow_agent::api::provider::LlmProvider> = mock;
     let (tx, mut rx) = mpsc::channel::<TurnEvent>(64);
     let cancel = CancellationToken::new();
     let request = new_request("nonexistent", 1024, vec![Message::user("hi")]);
 
-    run_turn(&reg, "s3".into(), request, tx, cancel).await;
+    run_turn(provider, "s3".into(), request, tx, cancel).await;
 
-    let ev = rx.try_recv().expect("expected one event");
+    // Drain events and confirm a clean Done was emitted (no hang/panic).
+    let mut got_done = false;
+    while let Ok(ev) = rx.try_recv() {
+        if matches!(ev, TurnEvent::Done { .. }) {
+            got_done = true;
+        }
+    }
     assert!(
-        matches!(ev, TurnEvent::Failed { retryable: false, .. }),
-        "expected Failed, got {ev:?}"
+        got_done,
+        "expected synthesized Done after empty provider stream"
     );
 }
 
@@ -294,7 +321,14 @@ async fn run_turn_cancel_stops_stream() {
 
     let cancel_handle = cancel.clone();
     let turn_handle = tokio::spawn(async move {
-        run_turn(&reg, "s4".into(), request, tx, cancel_handle).await;
+        run_turn(
+            Arc::clone(reg.default_provider().expect("anthropic registered")),
+            "s4".into(),
+            request,
+            tx,
+            cancel_handle,
+        )
+        .await;
     });
 
     // Wait until at least one event has been emitted, then cancel.

@@ -19,12 +19,16 @@ impl AppView {
 }
 
 impl Render for AppView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let storage = self.state.read(cx).storage.clone();
         let session_list = cx.new(|_| SessionListView::new(storage));
         let session_view = cx.new({
             let state = self.state.clone();
             move |_| SessionView::new(state)
+        });
+        let settings = cx.new({
+            let state = self.state.clone();
+            move |cx| SettingsPanel::new(state, window, cx)
         });
         let theme = cx.global::<Theme>();
         div()
@@ -36,10 +40,7 @@ impl Render for AppView {
                     .flex_1()
                     .child(session_list)
                     .child(session_view)
-                    .child({
-                        let settings = cx.new(|_| SettingsPanel);
-                        div().w(px(320.)).h_full().child(settings)
-                    }),
+                    .child(div().w(px(320.)).h_full().child(settings)),
             )
     }
 }

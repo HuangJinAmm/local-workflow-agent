@@ -3,7 +3,9 @@
 
 use std::collections::HashSet;
 
-#[derive(Debug, Clone)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     pub theme: ThemeMode,
     pub default_provider: String,         // "anthropic" | "openai"
@@ -14,10 +16,10 @@ pub struct Settings {
     pub tool_policy: ToolPolicy,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ThemeMode { Light, Dark, System }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ToolPolicy {
     pub disabled: HashSet<String>,            // empty = none disabled
     pub require_confirmation: HashSet<String>,
@@ -44,4 +46,5 @@ impl Default for Settings {
     }
 }
 
+pub mod persistence;
 pub mod settings_panel;

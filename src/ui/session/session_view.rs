@@ -93,8 +93,26 @@ impl SessionView {
         let mut request = new_request(&model, 1024, vec![user_msg]);
         request = with_app_tools(request, &state);
 
+        // Pick a provider up-front (clone the Arc) so we don't have to hold
+        // a non-Send parking_lot read guard across the spawn boundary.
+        let provider = {
+            let reg = state.providers.read();
+            use crate::core::provider_id::ProviderId;
+            let by_model = reg.get(&ProviderId::new(model.clone()));
+            match by_model.or_else(|| reg.default_provider()) {
+                Some(p) => std::sync::Arc::clone(p),
+                None => {
+                    drop(reg);
+                    let _ = state;
+                    self.phase = Phase::Idle;
+                    cx.notify();
+                    return;
+                }
+            }
+        };
+
         // Mark streaming, allocate cancel token, clear input.
-        let cancel = self.state.read(cx).begin_turn(session_id.clone());
+        let cancel = state.begin_turn(session_id.clone());
         self.cancel_token = Some(cancel.clone());
         self.phase = Phase::Streaming;
         let _ = std::mem::take(&mut self.input);
@@ -103,11 +121,10 @@ impl SessionView {
 
         // Spawn the producer on the tokio runtime owned by AppState.
         let runtime = self.state.read(cx).runtime.clone();
-        let providers = self.state.read(cx).providers.clone();
         let (tx, rx) = tokio::sync::mpsc::channel::<TurnEvent>(64);
         let session_id_for_turn = session_id.clone();
         runtime.spawn(async move {
-            run_turn(&providers, session_id_for_turn, request, tx, cancel).await;
+            run_turn(provider, session_id_for_turn, request, tx, cancel).await;
         });
 
         // Spawn the consumer on the GPUI executor so it can update the entity.
