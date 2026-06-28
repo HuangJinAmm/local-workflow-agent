@@ -1,5 +1,7 @@
 // ui::session::session_view — middle-pane chat area with input + streaming turn loop.
 
+use std::collections::HashMap;
+
 use gpui::*;
 use gpui_component::label::Label;
 use gpui_component::{v_flex, ActiveTheme};
@@ -26,6 +28,10 @@ pub struct SessionView {
     pub phase: Phase,
     pub cancel_token: Option<tokio_util::sync::CancellationToken>,
     pub input_bar: Entity<InputBar>,
+    /// Per-tool-use-id buffer of the partial JSON the model streams while
+    /// building a `tool_use` input. Parsed lazily on each delta so the UI
+    /// shows the input growing live; cleared when the tool is dispatched.
+    pub tool_input_buffer: HashMap<String, String>,
 }
 
 /// One user/assistant message plus the blocks we've already rendered for it.
@@ -52,6 +58,7 @@ impl SessionView {
             phase: Phase::Idle,
             cancel_token: None,
             input_bar,
+            tool_input_buffer: HashMap::new(),
         }
     }
 
@@ -74,6 +81,7 @@ impl SessionView {
             self.phase = Phase::Idle;
         }
         self.session_id = Some(session_id.clone());
+        self.tool_input_buffer.clear();
         let storage = self.state.read(cx).storage.clone();
         match storage.list_messages(&session_id) {
             Ok(stored) => {
@@ -222,10 +230,21 @@ impl SessionView {
 
         // Spawn the producer on the tokio runtime owned by AppState.
         let runtime = self.state.read(cx).runtime.clone();
+        let tools = self.state.read(cx).tools.clone();
+        let working_dir = self.state.read(cx).working_dir.clone();
         let (tx, rx) = tokio::sync::mpsc::channel::<TurnEvent>(64);
         let session_id_for_turn = session_id.clone();
         runtime.spawn(async move {
-            run_turn(provider, session_id_for_turn, request, tx, cancel).await;
+            run_turn(
+                provider,
+                session_id_for_turn,
+                request,
+                tools,
+                working_dir,
+                tx,
+                cancel,
+            )
+            .await;
         });
 
         // Spawn the consumer on the GPUI executor so it can update the entity.
@@ -282,9 +301,93 @@ impl SessionView {
                 }
                 cx.notify();
             }
+            TurnEvent::Stream(StreamEvent::ToolUseStart { block, id, name }) => {
+                // Seed an empty ToolUse block + start accumulating partial JSON.
+                self.tool_input_buffer
+                    .entry(id.clone())
+                    .or_insert_with(String::new);
+                if let Some(last) = self.messages.last_mut() {
+                    let already = last
+                        .blocks
+                        .iter()
+                        .any(|b| b.ordinal as usize == block);
+                    if !already {
+                        last.blocks.push(UiBlock {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            message_id: last.msg.id.clone(),
+                            ordinal: block as i32,
+                            kind: BlockKind::ToolUse {
+                                id,
+                                name,
+                                input: serde_json::Value::Null,
+                            },
+                        });
+                    }
+                }
+                cx.notify();
+            }
+            TurnEvent::Stream(StreamEvent::ToolUseDelta { block, partial_json }) => {
+                // Find the matching ToolUse block by ordinal, append to the
+                // side buffer, and re-parse the buffered JSON into the block's
+                // `input` so the UI shows it growing live.
+                if let Some(last) = self.messages.last_mut() {
+                    if let Some(b) = last
+                        .blocks
+                        .iter_mut()
+                        .find(|b| b.ordinal as usize == block)
+                    {
+                        if let BlockKind::ToolUse { id, input, .. } = &mut b.kind {
+                            let buf = self
+                                .tool_input_buffer
+                                .entry(id.clone())
+                                .or_insert_with(String::new);
+                            buf.push_str(&partial_json);
+                            *input = serde_json::from_str(buf)
+                                .unwrap_or(serde_json::Value::String(buf.clone()));
+                        }
+                    }
+                }
+                cx.notify();
+            }
+            TurnEvent::ToolStart { id, name } => {
+                // Could surface a "running…" indicator; for now we just log and
+                // rely on the existing ToolUse block to convey state.
+                tracing::debug!(tool = %name, %id, "tool start");
+            }
+            TurnEvent::ToolEnd { id, content, is_error } => {
+                // Push a separate Tool message carrying the result. Using a new
+                // message (vs. a sibling block on the assistant) lets the
+                // existing `render_message` emit a "Tool" header.
+                let tool_msg = UiMessage {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    session_id: self.session_id.clone().unwrap_or_default(),
+                    role: Role::ToolResult,
+                    created_at: chrono::Utc::now().timestamp_millis(),
+                    ordinal: self.messages.len() as i32,
+                };
+                let tool_block = UiBlock {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    message_id: tool_msg.id.clone(),
+                    ordinal: 0,
+                    kind: BlockKind::ToolResult {
+                        tool_use_id: id,
+                        content,
+                        is_error,
+                    },
+                };
+                self.messages.push(RenderedMessage {
+                    msg: tool_msg,
+                    blocks: vec![tool_block],
+                });
+                // Reset the buffer for this tool_use id so a re-used id (in a
+                // future turn) starts fresh.
+                self.tool_input_buffer.clear();
+                cx.notify();
+            }
             TurnEvent::Done { .. } | TurnEvent::Cancelled | TurnEvent::Failed { .. } => {
                 self.phase = Phase::Idle;
                 self.cancel_token = None;
+                self.tool_input_buffer.clear();
                 cx.notify();
             }
             _ => {}

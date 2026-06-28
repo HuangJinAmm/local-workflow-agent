@@ -19,21 +19,46 @@ use crate::api::provider_types::{
 };
 use crate::core::provider_id::{ModelId, ProviderId};
 
-/// A scripted provider. `events` is replayed in order on each
-/// `create_message_stream` call; once exhausted, the stream ends.
+/// A scripted provider. Each call to `create_message_stream` pops the
+/// next script from the queue and replays it; once the queue is empty,
+/// the stream ends (an empty stream). `MockProvider::new` builds a
+/// single-script queue for the common case.
 pub struct MockProvider {
     id: ProviderId,
     name: String,
-    events: Arc<Mutex<Vec<PStream>>>,
+    /// FIFO of event scripts. Each `create_message_stream` call pops
+    /// the head and replays it; an empty head means "no more events".
+    scripts: Arc<Mutex<Vec<Vec<PStream>>>>,
+    /// Number of `create_message_stream` calls observed; useful for
+    /// test assertions without exposing the queue internals.
+    call_count: Arc<Mutex<usize>>,
 }
 
 impl MockProvider {
     pub fn new(id: impl Into<String>, name: impl Into<String>, events: Vec<PStream>) -> Arc<Self> {
+        Self::with_scripts(id, name, vec![events])
+    }
+
+    /// Build a provider that replays a different script on every call.
+    /// The first call pops `scripts[0]`, the second call pops `scripts[1]`,
+    /// and so on. Once exhausted, additional calls return an empty
+    /// stream (which `run_turn` synthesizes as a clean `end_turn`).
+    pub fn with_scripts(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        scripts: Vec<Vec<PStream>>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             id: ProviderId::new(id.into()),
             name: name.into(),
-            events: Arc::new(Mutex::new(events)),
+            scripts: Arc::new(Mutex::new(scripts)),
+            call_count: Arc::new(Mutex::new(0)),
         })
+    }
+
+    /// Total number of `create_message_stream` calls observed.
+    pub fn call_count(&self) -> usize {
+        *self.call_count.lock()
     }
 }
 
@@ -61,21 +86,19 @@ impl LlmProvider for MockProvider {
         _request: ProviderRequest,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<PStream, ProviderError>> + Send>>, ProviderError>
     {
-        let events = Arc::clone(&self.events);
+        // Pop the next script (or an empty one if the queue is exhausted).
+        let script: Vec<PStream> = {
+            let mut guard = self.scripts.lock();
+            if guard.is_empty() {
+                Vec::new()
+            } else {
+                guard.remove(0)
+            }
+        };
+        *self.call_count.lock() += 1;
         let s = stream! {
-            loop {
-                let next: Option<PStream> = {
-                    let mut guard = events.lock();
-                    if guard.is_empty() {
-                        None
-                    } else {
-                        Some(guard.remove(0))
-                    }
-                }; // guard dropped here
-                match next {
-                    Some(ev) => yield Ok(ev),
-                    None => break,
-                }
+            for ev in script {
+                yield Ok(ev);
             }
         };
         Ok(Box::pin(s))
