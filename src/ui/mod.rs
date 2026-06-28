@@ -3,6 +3,7 @@
 
 pub mod app;
 pub mod app_view;
+pub mod input;
 pub mod model;
 pub mod provider;
 pub mod session;

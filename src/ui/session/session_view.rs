@@ -5,6 +5,8 @@ use gpui::*;
 use gpui_component::label::Label;
 use gpui_component::{v_flex, Theme};
 
+use crate::ui::input::input_bar::InputBar;
+
 pub struct SessionView;
 
 impl Render for SessionView {
@@ -13,8 +15,8 @@ impl Render for SessionView {
         v_flex()
             .size_full()
             .bg(theme.background)
-            .items_center()
-            .justify_center()
-            .child(Label::new("No session selected").text_color(theme.muted_foreground))
+            .child(div().flex_1().items_center().justify_center()
+                .child(Label::new("No session selected").text_color(theme.muted_foreground)))
+            .child(cx.new(|_| InputBar::new()))
     }
 }
