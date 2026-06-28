@@ -5,8 +5,9 @@
 //
 // Design mirrors Codex thread_goals (codex-rs/state/src/runtime/goals.rs).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+use turso::{Builder, Database, Row, Value};
 
 /// Maximum number of characters allowed in an objective (matches Codex MAX_THREAD_GOAL_OBJECTIVE_CHARS).
 pub const MAX_OBJECTIVE_CHARS: usize = 4000;
@@ -128,20 +129,106 @@ impl std::fmt::Display for GoalError {
 impl std::error::Error for GoalError {}
 
 // ---------------------------------------------------------------------------
-// GoalStore — SQLite backend
+// GoalStore — Turso backend
 // ---------------------------------------------------------------------------
 
 pub struct GoalStore {
-    conn: rusqlite::Connection,
+    db: Database,
 }
 
 impl GoalStore {
-    /// Open (or create) the goal database.
-    pub fn open(db_path: &std::path::Path) -> Result<Self, GoalError> {
-        let conn = rusqlite::Connection::open(db_path)
-            .map_err(|e| GoalError::Db(e.to_string()))?;
+    fn db_error<E: ToString>(err: E) -> GoalError {
+        GoalError::Db(err.to_string())
+    }
 
-        conn.execute_batch(
+    fn conversion_error(field: &str, value: &Value) -> GoalError {
+        GoalError::Db(format!(
+            "Unexpected value type for {}: {:?}",
+            field, value
+        ))
+    }
+
+    fn u64_to_i64(field: &str, value: u64) -> Result<i64, GoalError> {
+        i64::try_from(value).map_err(|_| {
+            GoalError::Db(format!("{} value {} does not fit into i64", field, value))
+        })
+    }
+
+    fn i64_to_u64(field: &str, value: i64) -> Result<u64, GoalError> {
+        u64::try_from(value)
+            .map_err(|_| GoalError::Db(format!("{} value {} is negative", field, value)))
+    }
+
+    fn i64_to_u32(field: &str, value: i64) -> Result<u32, GoalError> {
+        u32::try_from(value).map_err(|_| {
+            GoalError::Db(format!("{} value {} is outside the u32 range", field, value))
+        })
+    }
+
+    fn row_text(row: &Row, idx: usize, field: &str) -> Result<String, GoalError> {
+        match row.get_value(idx).map_err(Self::db_error)? {
+            Value::Text(value) => Ok(value),
+            value => Err(Self::conversion_error(field, &value)),
+        }
+    }
+
+    fn row_i64(row: &Row, idx: usize, field: &str) -> Result<i64, GoalError> {
+        match row.get_value(idx).map_err(Self::db_error)? {
+            Value::Integer(value) => Ok(value),
+            value => Err(Self::conversion_error(field, &value)),
+        }
+    }
+
+    fn row_optional_u64(row: &Row, idx: usize, field: &str) -> Result<Option<u64>, GoalError> {
+        match row.get_value(idx).map_err(Self::db_error)? {
+            Value::Null => Ok(None),
+            Value::Integer(value) => Ok(Some(Self::i64_to_u64(field, value)?)),
+            value => Err(Self::conversion_error(field, &value)),
+        }
+    }
+
+    fn goal_from_row(row: &Row) -> Result<Goal, GoalError> {
+        let status_str = Self::row_text(row, 3, "status")?;
+        let status = GoalStatus::from_str(&status_str).unwrap_or(GoalStatus::Paused);
+
+        Ok(Goal {
+            id: Self::row_text(row, 0, "id")?,
+            session_id: Self::row_text(row, 1, "session_id")?,
+            objective: Self::row_text(row, 2, "objective")?,
+            status,
+            token_budget: Self::row_optional_u64(row, 4, "token_budget")?,
+            tokens_used: Self::i64_to_u64("tokens_used", Self::row_i64(row, 5, "tokens_used")?)?,
+            time_used_secs: Self::i64_to_u64(
+                "time_used_secs",
+                Self::row_i64(row, 6, "time_used_secs")?,
+            )?,
+            turns_used: Self::i64_to_u32("turns_used", Self::row_i64(row, 7, "turns_used")?)?,
+            created_at_ms: Self::i64_to_u64(
+                "created_at_ms",
+                Self::row_i64(row, 8, "created_at_ms")?,
+            )?,
+            updated_at_ms: Self::i64_to_u64(
+                "updated_at_ms",
+                Self::row_i64(row, 9, "updated_at_ms")?,
+            )?,
+        })
+    }
+
+    fn connect(&self) -> Result<turso::Connection, GoalError> {
+        self.db.connect().map_err(Self::db_error)
+    }
+
+    /// Open (or create) the goal database.
+    pub async fn open(db_path: &Path) -> Result<Self, GoalError> {
+        let db_path = db_path.to_string_lossy().to_string();
+        let db = Builder::new_local(&db_path)
+            .build()
+            .await
+            .map_err(Self::db_error)?;
+
+        let conn = db.connect().map_err(Self::db_error)?;
+
+        conn.execute(
             "CREATE TABLE IF NOT EXISTS goals (
                 id              TEXT PRIMARY KEY,
                 session_id      TEXT NOT NULL,
@@ -153,12 +240,20 @@ impl GoalStore {
                 turns_used      INTEGER NOT NULL DEFAULT 0,
                 created_at_ms   INTEGER NOT NULL,
                 updated_at_ms   INTEGER NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_goals_session ON goals(session_id);",
+            )",
+            (),
         )
-        .map_err(|e| GoalError::Db(e.to_string()))?;
+        .await
+        .map_err(Self::db_error)?;
 
-        Ok(Self { conn })
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_goals_session ON goals(session_id)",
+            (),
+        )
+        .await
+        .map_err(Self::db_error)?;
+
+        Ok(Self { db })
     }
 
     /// Default path: `~/.claurst/goals.sqlite`.
@@ -167,8 +262,9 @@ impl GoalStore {
     }
 
     /// Open using the default path (best-effort; returns None on failure).
-    pub fn open_default() -> Option<Self> {
-        Self::default_path().and_then(|p| Self::open(&p).ok())
+    pub async fn open_default() -> Option<Self> {
+        let path = Self::default_path()?;
+        Self::open(&path).await.ok()
     }
 
     fn now_ms() -> u64 {
@@ -179,7 +275,7 @@ impl GoalStore {
     }
 
     /// Create or replace the active goal for a session.
-    pub fn set_goal(
+    pub async fn set_goal(
         &self,
         session_id: &str,
         objective: &str,
@@ -194,21 +290,30 @@ impl GoalStore {
 
         let now = Self::now_ms();
         let id = uuid_v4();
+        let token_budget_i64 = match token_budget {
+            Some(value) => Some(Self::u64_to_i64("token_budget", value)?),
+            None => None,
+        };
+        let now_i64 = Self::u64_to_i64("timestamp", now)?;
+        let mut conn = self.connect()?;
+        let tx = conn.transaction().await.map_err(Self::db_error)?;
 
-        // Remove any pre-existing goal for this session first.
-        self.conn
-            .execute("DELETE FROM goals WHERE session_id = ?1", [session_id])
-            .map_err(|e| GoalError::Db(e.to_string()))?;
+        // Keep replacement atomic so the session never observes an empty goal.
+        tx.execute("DELETE FROM goals WHERE session_id = ?1", [session_id])
+            .await
+            .map_err(Self::db_error)?;
 
-        self.conn
-            .execute(
-                "INSERT INTO goals
-                 (id, session_id, objective, status, token_budget,
-                  tokens_used, time_used_secs, turns_used, created_at_ms, updated_at_ms)
-                 VALUES (?1, ?2, ?3, 'active', ?4, 0, 0, 0, ?5, ?5)",
-                rusqlite::params![id, session_id, objective, token_budget, now],
-            )
-            .map_err(|e| GoalError::Db(e.to_string()))?;
+        tx.execute(
+            "INSERT INTO goals
+             (id, session_id, objective, status, token_budget,
+              tokens_used, time_used_secs, turns_used, created_at_ms, updated_at_ms)
+             VALUES (?1, ?2, ?3, 'active', ?4, 0, 0, 0, ?5, ?5)",
+            turso::params![id.as_str(), session_id, objective, token_budget_i64, now_i64],
+        )
+        .await
+        .map_err(Self::db_error)?;
+
+        tx.commit().await.map_err(Self::db_error)?;
 
         Ok(Goal {
             id,
@@ -225,87 +330,89 @@ impl GoalStore {
     }
 
     /// Get the current goal for a session (any status).
-    pub fn get_goal(&self, session_id: &str) -> Option<Goal> {
-        self.conn
-            .query_row(
+    pub async fn get_goal(&self, session_id: &str) -> Option<Goal> {
+        let conn = self.connect().ok()?;
+        let mut rows = conn
+            .query(
                 "SELECT id, session_id, objective, status, token_budget,
                         tokens_used, time_used_secs, turns_used,
                         created_at_ms, updated_at_ms
                  FROM goals WHERE session_id = ?1",
                 [session_id],
-                |row| {
-                    let status_str: String = row.get(3)?;
-                    Ok(Goal {
-                        id: row.get(0)?,
-                        session_id: row.get(1)?,
-                        objective: row.get(2)?,
-                        status: GoalStatus::from_str(&status_str)
-                            .unwrap_or(GoalStatus::Paused),
-                        token_budget: row.get(4)?,
-                        tokens_used: row.get::<_, i64>(5)? as u64,
-                        time_used_secs: row.get::<_, i64>(6)? as u64,
-                        turns_used: row.get::<_, i64>(7)? as u32,
-                        created_at_ms: row.get::<_, i64>(8)? as u64,
-                        updated_at_ms: row.get::<_, i64>(9)? as u64,
-                    })
-                },
             )
-            .ok()
+            .await
+            .ok()?;
+
+        match rows.next().await {
+            Ok(Some(row)) => Self::goal_from_row(&row).ok(),
+            Ok(None) | Err(_) => None,
+        }
     }
 
     /// Get the active goal for a session (status = 'active' only).
-    pub fn get_active_goal(&self, session_id: &str) -> Option<Goal> {
+    pub async fn get_active_goal(&self, session_id: &str) -> Option<Goal> {
         self.get_goal(session_id)
+            .await
             .filter(|g| g.status == GoalStatus::Active)
     }
 
     /// Update the status of the goal for a session.
-    pub fn set_status(&self, session_id: &str, status: GoalStatus) -> Result<(), GoalError> {
-        let now = Self::now_ms();
-        self.conn
-            .execute(
-                "UPDATE goals SET status = ?1, updated_at_ms = ?2 WHERE session_id = ?3",
-                rusqlite::params![status.as_str(), now, session_id],
-            )
-            .map_err(|e| GoalError::Db(e.to_string()))?;
+    pub async fn set_status(&self, session_id: &str, status: GoalStatus) -> Result<(), GoalError> {
+        let now = Self::u64_to_i64("timestamp", Self::now_ms())?;
+        let conn = self.connect()?;
+
+        conn.execute(
+            "UPDATE goals SET status = ?1, updated_at_ms = ?2 WHERE session_id = ?3",
+            turso::params![status.as_str(), now, session_id],
+        )
+        .await
+        .map_err(Self::db_error)?;
         Ok(())
     }
 
     /// Delete the goal for a session (called by /goal clear).
-    pub fn clear_goal(&self, session_id: &str) -> Result<(), GoalError> {
-        self.conn
-            .execute("DELETE FROM goals WHERE session_id = ?1", [session_id])
-            .map_err(|e| GoalError::Db(e.to_string()))?;
+    pub async fn clear_goal(&self, session_id: &str) -> Result<(), GoalError> {
+        let conn = self.connect()?;
+
+        conn.execute("DELETE FROM goals WHERE session_id = ?1", [session_id])
+            .await
+            .map_err(Self::db_error)?;
         Ok(())
     }
 
     /// Record one completed turn: increment turns_used, add elapsed seconds.
-    pub fn record_turn(&self, session_id: &str, elapsed_secs: u64) -> Result<(), GoalError> {
-        let now = Self::now_ms();
-        self.conn
-            .execute(
-                "UPDATE goals
-                 SET turns_used = turns_used + 1,
-                     time_used_secs = time_used_secs + ?1,
-                     updated_at_ms = ?2
-                 WHERE session_id = ?3",
-                rusqlite::params![elapsed_secs, now, session_id],
-            )
-            .map_err(|e| GoalError::Db(e.to_string()))?;
+    pub async fn record_turn(&self, session_id: &str, elapsed_secs: u64) -> Result<(), GoalError> {
+        let now = Self::u64_to_i64("timestamp", Self::now_ms())?;
+        let elapsed_secs = Self::u64_to_i64("elapsed_secs", elapsed_secs)?;
+        let conn = self.connect()?;
+
+        conn.execute(
+            "UPDATE goals
+             SET turns_used = turns_used + 1,
+                 time_used_secs = time_used_secs + ?1,
+                 updated_at_ms = ?2
+             WHERE session_id = ?3",
+            turso::params![elapsed_secs, now, session_id],
+        )
+        .await
+        .map_err(Self::db_error)?;
         Ok(())
     }
 
     /// Add token usage (used to enforce soft budget).
-    pub fn add_tokens(&self, session_id: &str, tokens: u64) -> Result<(), GoalError> {
-        let now = Self::now_ms();
-        self.conn
-            .execute(
-                "UPDATE goals
-                 SET tokens_used = tokens_used + ?1, updated_at_ms = ?2
-                 WHERE session_id = ?3",
-                rusqlite::params![tokens, now, session_id],
-            )
-            .map_err(|e| GoalError::Db(e.to_string()))?;
+    pub async fn add_tokens(&self, session_id: &str, tokens: u64) -> Result<(), GoalError> {
+        let now = Self::u64_to_i64("timestamp", Self::now_ms())?;
+        let tokens = Self::u64_to_i64("tokens", tokens)?;
+        let conn = self.connect()?;
+
+        conn.execute(
+            "UPDATE goals
+             SET tokens_used = tokens_used + ?1, updated_at_ms = ?2
+             WHERE session_id = ?3",
+            turso::params![tokens, now, session_id],
+        )
+        .await
+        .map_err(Self::db_error)?;
         Ok(())
     }
 }
@@ -417,81 +524,86 @@ pub fn goal_continuation_message(goal: &Goal) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
-    fn open_tmp() -> GoalStore {
-        GoalStore::open(Path::new(":memory:")).unwrap()
+    async fn open_tmp() -> GoalStore {
+        GoalStore::open(Path::new(":memory:")).await.unwrap()
     }
 
-    #[test]
-    fn test_set_and_get_goal() {
-        let store = open_tmp();
-        let goal = store.set_goal("sess1", "fix all the bugs", None).unwrap();
+    #[tokio::test]
+    async fn test_set_and_get_goal() {
+        let store = open_tmp().await;
+        let goal = store
+            .set_goal("sess1", "fix all the bugs", None)
+            .await
+            .unwrap();
         assert_eq!(goal.status, GoalStatus::Active);
         assert_eq!(goal.turns_used, 0);
 
-        let fetched = store.get_goal("sess1").unwrap();
+        let fetched = store.get_goal("sess1").await.unwrap();
         assert_eq!(fetched.objective, "fix all the bugs");
         assert_eq!(fetched.status, GoalStatus::Active);
     }
 
-    #[test]
-    fn test_objective_too_long() {
-        let store = open_tmp();
+    #[tokio::test]
+    async fn test_objective_too_long() {
+        let store = open_tmp().await;
         let long_obj = "x".repeat(MAX_OBJECTIVE_CHARS + 1);
-        let result = store.set_goal("sess1", &long_obj, None);
+        let result = store.set_goal("sess1", &long_obj, None).await;
         assert!(matches!(result, Err(GoalError::ObjectiveTooLong { .. })));
     }
 
-    #[test]
-    fn test_status_transitions() {
-        let store = open_tmp();
-        store.set_goal("sess1", "migrate DB", None).unwrap();
+    #[tokio::test]
+    async fn test_status_transitions() {
+        let store = open_tmp().await;
+        store.set_goal("sess1", "migrate DB", None).await.unwrap();
 
-        store.set_status("sess1", GoalStatus::Paused).unwrap();
-        assert_eq!(store.get_goal("sess1").unwrap().status, GoalStatus::Paused);
+        store.set_status("sess1", GoalStatus::Paused).await.unwrap();
+        assert_eq!(store.get_goal("sess1").await.unwrap().status, GoalStatus::Paused);
 
-        store.set_status("sess1", GoalStatus::Active).unwrap();
-        assert_eq!(store.get_goal("sess1").unwrap().status, GoalStatus::Active);
+        store.set_status("sess1", GoalStatus::Active).await.unwrap();
+        assert_eq!(store.get_goal("sess1").await.unwrap().status, GoalStatus::Active);
 
-        store.set_status("sess1", GoalStatus::Complete).unwrap();
-        assert!(store.get_active_goal("sess1").is_none());
+        store.set_status("sess1", GoalStatus::Complete).await.unwrap();
+        assert!(store.get_active_goal("sess1").await.is_none());
     }
 
-    #[test]
-    fn test_clear_goal() {
-        let store = open_tmp();
-        store.set_goal("sess1", "some goal", None).unwrap();
-        store.clear_goal("sess1").unwrap();
-        assert!(store.get_goal("sess1").is_none());
+    #[tokio::test]
+    async fn test_clear_goal() {
+        let store = open_tmp().await;
+        store.set_goal("sess1", "some goal", None).await.unwrap();
+        store.clear_goal("sess1").await.unwrap();
+        assert!(store.get_goal("sess1").await.is_none());
     }
 
-    #[test]
-    fn test_record_turn() {
-        let store = open_tmp();
-        store.set_goal("sess1", "build feature", None).unwrap();
-        store.record_turn("sess1", 30).unwrap();
-        store.record_turn("sess1", 45).unwrap();
-        let g = store.get_goal("sess1").unwrap();
+    #[tokio::test]
+    async fn test_record_turn() {
+        let store = open_tmp().await;
+        store.set_goal("sess1", "build feature", None).await.unwrap();
+        store.record_turn("sess1", 30).await.unwrap();
+        store.record_turn("sess1", 45).await.unwrap();
+        let g = store.get_goal("sess1").await.unwrap();
         assert_eq!(g.turns_used, 2);
         assert_eq!(g.time_used_secs, 75);
     }
 
-    #[test]
-    fn test_replace_goal() {
-        let store = open_tmp();
-        store.set_goal("sess1", "first goal", None).unwrap();
-        store.set_goal("sess1", "second goal", Some(100_000)).unwrap();
-        let g = store.get_goal("sess1").unwrap();
+    #[tokio::test]
+    async fn test_replace_goal() {
+        let store = open_tmp().await;
+        store.set_goal("sess1", "first goal", None).await.unwrap();
+        store
+            .set_goal("sess1", "second goal", Some(100_000))
+            .await
+            .unwrap();
+        let g = store.get_goal("sess1").await.unwrap();
         assert_eq!(g.objective, "second goal");
         assert_eq!(g.token_budget, Some(100_000));
     }
 
-    #[test]
-    fn test_no_goal_returns_none() {
-        let store = open_tmp();
-        assert!(store.get_goal("unknown_session").is_none());
-        assert!(store.get_active_goal("unknown_session").is_none());
+    #[tokio::test]
+    async fn test_no_goal_returns_none() {
+        let store = open_tmp().await;
+        assert!(store.get_goal("unknown_session").await.is_none());
+        assert!(store.get_active_goal("unknown_session").await.is_none());
     }
 
     #[test]
@@ -513,10 +625,13 @@ mod tests {
         assert_eq!(make_goal(3661).elapsed_display(), "1h1m");
     }
 
-    #[test]
-    fn test_token_budget_over() {
-        let store = open_tmp();
-        let goal = store.set_goal("sess1", "opt prompts", Some(1000)).unwrap();
+    #[tokio::test]
+    async fn test_token_budget_over() {
+        let store = open_tmp().await;
+        let goal = store
+            .set_goal("sess1", "opt prompts", Some(1000))
+            .await
+            .unwrap();
         assert!(!goal.is_over_budget(999));
         assert!(goal.is_over_budget(1000));
     }

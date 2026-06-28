@@ -54,6 +54,7 @@ mime = "0.3"
 mime_guess = "2"
 urlencoding = "2"
 rusqlite = { version = "0.31", features = ["bundled"] }
+turso = "0.6.1"
 
 # Text processing
 similar = "2"
