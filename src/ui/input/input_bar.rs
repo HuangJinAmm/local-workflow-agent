@@ -1,6 +1,5 @@
 // ui::input::input_bar — bottom-of-pane input.
 
-use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::{h_flex, Theme};

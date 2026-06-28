@@ -1,6 +1,5 @@
 // ui::session::session_view — middle-pane chat area with input + streaming turn loop.
 
-use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::label::Label;
 use gpui_component::{v_flex, Theme};

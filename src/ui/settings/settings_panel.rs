@@ -1,6 +1,5 @@
 // ui::settings::settings_panel — right drawer for theme/provider/key/tool policy.
 
-use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::label::Label;
 use gpui_component::{v_flex, StyledExt, Theme};

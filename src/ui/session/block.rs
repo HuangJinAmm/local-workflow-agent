@@ -1,7 +1,6 @@
 // ui::session::block — render a single UiBlock. State (collapse flag) lives
 // in the parent MessageView and is passed in.
 
-use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::label::Label;
 use gpui_component::{h_flex, v_flex, StyledExt, Theme};

@@ -9,7 +9,6 @@
 // a stateless markdown element), switch text blocks to use the markdown
 // renderer. For now `render_text_or_markdown` is a plain-text fallback.
 
-use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::label::Label;
 use gpui_component::{v_flex, StyledExt, Theme};
