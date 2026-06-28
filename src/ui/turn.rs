@@ -1,7 +1,6 @@
 // ui::turn — the agent turn loop. Pulls events from the provider, accumulates
 // into UiMessage, persists, executes tool calls, and loops until end_turn or cancel.
 
-use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
@@ -25,7 +24,7 @@ pub enum TurnEvent {
 }
 
 pub async fn run_turn(
-    state: Arc<AppState>,
+    state: &AppState,
     session_id: SessionId,
     request: crate::api::CreateMessageRequest,
     sink: EventSink,
