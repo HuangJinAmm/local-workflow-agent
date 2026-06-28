@@ -6,6 +6,7 @@ use gpui_component::*;
 use super::app::AppState;
 use super::session::session_list::SessionListView;
 use super::session::session_view::SessionView;
+use super::settings::settings_panel::SettingsPanel;
 
 pub struct AppView {
     state: Entity<AppState>,
@@ -35,13 +36,10 @@ impl Render for AppView {
                     .flex_1()
                     .child(session_list)
                     .child(session_view)
-                    .child(
-                        div()
-                            .w(px(320.))
-                            .h_full()
-                            .bg(theme.muted)
-                            .child("Settings (right)"),
-                    ),
+                    .child({
+                        let settings = cx.new(|_| SettingsPanel);
+                        div().w(px(320.)).h_full().child(settings)
+                    }),
             )
     }
 }

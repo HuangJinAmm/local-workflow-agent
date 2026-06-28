@@ -5,10 +5,23 @@ use gpui_component::*;
 use local_workflow_agent::ui::app::AppState;
 use local_workflow_agent::ui::app_view::AppView;
 
+use gpui::actions;
+actions!(agent_gui, [NewSession, ToggleTheme, OpenSettings, CancelTurn]);
+
 fn main() -> anyhow::Result<()> {
     let app = Application::new();
     app.run(move |cx| {
         gpui_component::init(cx);
+        local_workflow_agent::ui::theme::register(cx);
+        cx.bind_keys([
+            KeyBinding::new("cmd-n", NewSession, None),
+            KeyBinding::new("ctrl-n", NewSession, None),
+            KeyBinding::new("cmd-t", ToggleTheme, None),
+            KeyBinding::new("ctrl-t", ToggleTheme, None),
+            KeyBinding::new("cmd-,", OpenSettings, None),
+            KeyBinding::new("ctrl-,", OpenSettings, None),
+            KeyBinding::new("escape", CancelTurn, None),
+        ]);
         let working_dir = std::env::current_dir().expect("resolve cwd");
         // For the GUI binary, use a project-local data dir by default so the
         // app works in sandboxed environments. The CLI / library path keeps

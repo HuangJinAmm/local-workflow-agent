@@ -43,3 +43,5 @@ impl Default for Settings {
         }
     }
 }
+
+pub mod settings_panel;
