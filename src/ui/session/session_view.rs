@@ -6,7 +6,7 @@ use gpui_component::{v_flex, ActiveTheme};
 
 use crate::ui::app::AppState;
 use crate::ui::input::input_bar::InputBar;
-use crate::ui::model::{BlockKind, Role, UiBlock, UiMessage};
+use crate::ui::model::{Attachment, BlockKind, Role, UiBlock, UiMessage};
 use crate::ui::session::message::render_message;
 use crate::ui::stream::StreamEvent;
 use crate::ui::turn::{make_user_message, new_request, run_turn, with_app_tools, TurnEvent};
@@ -42,7 +42,8 @@ pub enum Phase {
 
 impl SessionView {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
-        let input_bar = cx.new(|_| InputBar::new(state.clone()));
+        let weak = cx.entity().downgrade();
+        let input_bar = cx.new(|_| InputBar::new(state.clone(), weak));
         Self {
             state,
             session_id: None,
@@ -54,9 +55,18 @@ impl SessionView {
         }
     }
 
+    /// Public view of the streaming phase. Used by the InputBar to
+    /// disable the Send button while a turn is in flight.
+    pub fn is_streaming(&self) -> bool {
+        self.phase == Phase::Streaming
+    }
+
     /// Append a new user message and kick off a turn.
-    pub fn submit(&mut self, cx: &mut Context<Self>) {
-        if self.input.trim().is_empty() || self.phase != Phase::Idle {
+    ///
+    /// `text` and `pending` come from the `InputBar`; the bar already
+    /// cleared them from its own state by the time it calls us.
+    pub fn submit(&mut self, text: String, pending: Vec<Attachment>, cx: &mut Context<Self>) {
+        if text.trim().is_empty() || self.phase != Phase::Idle {
             return;
         }
         let session_id = self
@@ -72,15 +82,24 @@ impl SessionView {
             created_at: chrono::Utc::now().timestamp_millis(),
             ordinal: self.messages.len() as i32,
         };
-        let user_block = UiBlock {
+        let mut user_blocks: Vec<UiBlock> = Vec::new();
+        if !pending.is_empty() {
+            user_blocks.push(UiBlock {
+                id: uuid::Uuid::new_v4().to_string(),
+                message_id: user_msg.id.clone(),
+                ordinal: 0,
+                kind: BlockKind::Attachments { items: pending.clone() },
+            });
+        }
+        user_blocks.push(UiBlock {
             id: uuid::Uuid::new_v4().to_string(),
             message_id: user_msg.id.clone(),
-            ordinal: 0,
-            kind: BlockKind::Text { text: self.input.clone() },
-        };
+            ordinal: user_blocks.len() as i32,
+            kind: BlockKind::Text { text: text.clone() },
+        });
         self.messages.push(RenderedMessage {
             msg: user_msg,
-            blocks: vec![user_block],
+            blocks: user_blocks,
         });
 
         // Push assistant placeholder so streaming has somewhere to land.
@@ -100,7 +119,7 @@ impl SessionView {
         // dispatches to the right `LlmProvider` based on settings.
         let state = self.state.read(cx);
         let model = state.settings.read().default_model.clone();
-        let user_msg = make_user_message(&self.input, &[]);
+        let user_msg = make_user_message(&text, &pending);
         let mut request = new_request(&model, 1024, vec![user_msg]);
         request = with_app_tools(request, &state);
 
@@ -122,11 +141,13 @@ impl SessionView {
             }
         };
 
-        // Mark streaming, allocate cancel token, clear input.
+        // Mark streaming, allocate cancel token. (No more `self.input` to
+        // clear — the InputBar already cleared its own buffer before calling
+        // us.)
         let cancel = state.begin_turn(session_id.clone());
         self.cancel_token = Some(cancel.clone());
         self.phase = Phase::Streaming;
-        let _ = std::mem::take(&mut self.input);
+        self.input.clear();
         let _ = state; // release the read guard before notify
         cx.notify();
 
@@ -160,6 +181,17 @@ impl SessionView {
             }
         })
         .detach();
+    }
+
+    /// Convenience alias used by the InputBar's submit callback. Delegates
+    /// to `submit` so the call site reads naturally.
+    pub fn submit_from_input(
+        &mut self,
+        text: String,
+        pending: Vec<Attachment>,
+        cx: &mut Context<Self>,
+    ) {
+        self.submit(text, pending, cx);
     }
 
     pub fn on_turn_event(&mut self, ev: TurnEvent, cx: &mut Context<Self>) {
