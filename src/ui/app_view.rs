@@ -3,7 +3,7 @@
 use gpui::*;
 use gpui_component::*;
 
-use super::app::AppState;
+use super::app::{apply_theme, AppState};
 use super::session::session_list::SessionListView;
 use super::session::session_view::SessionView;
 use super::settings::settings_panel::SettingsPanel;
@@ -13,7 +13,16 @@ pub struct AppView {
 }
 
 impl AppView {
-    pub fn new(state: Entity<AppState>, _window: &mut Window, _cx: &mut Context<Self>) -> Self {
+    pub fn new(state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        // Apply the persisted theme at view construction so the user
+        // sees their saved light/dark/system choice immediately. We
+        // need a `&mut Window` (for `window.appearance()` in `System`
+        // mode) and we already have one in this constructor.
+        let initial_mode = state.read(cx).settings.read().theme;
+        if let Err(e) = state.read(cx).set_theme_persist(initial_mode) {
+            tracing::warn!(?e, "AppView boot set_theme_persist failed");
+        }
+        apply_theme(initial_mode, Some(window), cx);
         Self { state }
     }
 }

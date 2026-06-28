@@ -1,11 +1,13 @@
 // tests/ui_settings_runtime.rs
-//! Verify `AppState::update_api_key` and `set_default_model` write to disk
-//! and rebuild the in-memory `ProviderRegistry` from the new settings.
+//! Verify `AppState::update_api_key`, `set_default_model`, and
+//! `set_theme_persist` write to disk and rebuild the in-memory state
+//! (registry / settings) from the new values.
 
 use std::path::PathBuf;
 
 use local_workflow_agent::ui::app::AppState;
 use local_workflow_agent::ui::settings::persistence;
+use local_workflow_agent::ui::settings::ThemeMode;
 
 fn fresh_data_dir(tag: &str) -> PathBuf {
     let p = std::env::temp_dir().join(format!(
@@ -115,4 +117,32 @@ fn whitespace_only_key_treated_as_empty() {
         normalized, None,
         "whitespace-only key should be treated as cleared"
     );
+}
+
+#[test]
+fn set_theme_persist_writes_to_disk_and_updates_settings() {
+    let dir = fresh_data_dir("theme");
+    let state = AppState::with_data_dir(dir.clone(), dir.clone()).expect("app state");
+
+    // We only test the persistence side; the live `Theme::change` call
+    // requires a `gpui::App` which is not available in a plain test.
+    // (The apply step is exercised manually via the agent-gui binary.)
+    state
+        .set_theme_persist(ThemeMode::Dark)
+        .expect("set_theme_persist ok");
+
+    let reloaded = persistence::load(&dir);
+    assert_eq!(reloaded.theme, ThemeMode::Dark);
+
+    state
+        .set_theme_persist(ThemeMode::Light)
+        .expect("set_theme_persist light");
+    let reloaded = persistence::load(&dir);
+    assert_eq!(reloaded.theme, ThemeMode::Light);
+
+    state
+        .set_theme_persist(ThemeMode::System)
+        .expect("set_theme_persist system");
+    let reloaded = persistence::load(&dir);
+    assert_eq!(reloaded.theme, ThemeMode::System);
 }

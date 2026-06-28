@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use gpui::{App, Window, WindowAppearance};
 use parking_lot::RwLock;
 use tokio::runtime::Runtime;
 use tokio_util::sync::CancellationToken;
@@ -18,7 +19,7 @@ use crate::tools::{all_tools, Tool};
 
 use super::model::SessionId;
 use super::settings::persistence;
-use super::settings::Settings;
+use super::settings::{Settings, ThemeMode};
 use super::storage::MessageStore;
 
 pub struct AppState {
@@ -126,6 +127,32 @@ impl AppState {
         let snapshot = self.settings.read().clone();
         *self.providers.write() = build_registry_from_settings(snapshot);
     }
+
+    /// Persist the theme choice only (no live apply). Use this when the
+    /// caller wants to control when the global `Theme` is updated.
+    pub fn set_theme_persist(&self, mode: ThemeMode) -> anyhow::Result<()> {
+        let mut s = self.settings.write();
+        s.theme = mode;
+        let data_dir = self
+            .attachments_dir
+            .parent()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."));
+        persistence::save(&data_dir, &s).map_err(|e| anyhow::anyhow!("save settings: {e}"))
+    }
+
+    /// Persist + apply the theme in one shot. Holds an internal settings
+    /// lock only briefly so callers can re-borrow `cx` for the live apply.
+    pub fn set_theme_apply(
+        &self,
+        mode: ThemeMode,
+        window: Option<&mut Window>,
+        cx: &mut App,
+    ) -> anyhow::Result<()> {
+        self.set_theme_persist(mode)?;
+        apply_theme(mode, window, cx);
+        Ok(())
+    }
 }
 
 /// Build a `ProviderRegistry` from a `Settings` snapshot. Mirrors the
@@ -174,4 +201,35 @@ fn default_data_dir() -> PathBuf {
     }
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     home.join(".local-workflow-agent")
+}
+
+/// Apply `mode` to the running `gpui_component::Theme` global. `System`
+/// resolves via `window.appearance()` when a window is provided; without
+/// a window, the call falls back to light. Public so view listeners can
+/// invoke the apply after their own short-borrow scope ends.
+pub fn apply_theme(mode: ThemeMode, window: Option<&mut Window>, cx: &mut App) {
+    use gpui_component::Theme;
+    let is_dark = window.as_ref().map(|w| w.appearance().is_dark()).unwrap_or(false);
+    let resolved = match mode {
+        ThemeMode::Light => gpui_component::ThemeMode::Light,
+        ThemeMode::Dark => gpui_component::ThemeMode::Dark,
+        ThemeMode::System => {
+            if is_dark {
+                gpui_component::ThemeMode::Dark
+            } else {
+                gpui_component::ThemeMode::Light
+            }
+        }
+    };
+    Theme::change(resolved, window, cx);
+}
+
+trait WindowAppearanceExt {
+    fn is_dark(&self) -> bool;
+}
+
+impl WindowAppearanceExt for WindowAppearance {
+    fn is_dark(&self) -> bool {
+        matches!(self, WindowAppearance::Dark | WindowAppearance::VibrantDark)
+    }
 }

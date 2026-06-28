@@ -121,21 +121,14 @@ impl SettingsPanel {
         cx.notify();
     }
 
-    fn set_theme(&mut self, mode: ThemeMode, cx: &mut Context<Self>) {
-        let data_dir = self
-            .state
-            .read(cx)
-            .attachments_dir
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| Path::new(".").to_path_buf());
-        let mut s = self.state.read(cx).settings.write();
-        s.theme = mode;
-        if let Err(e) = persistence::save(&data_dir, &s) {
-            tracing::warn!(?e, "save settings failed");
+    fn set_theme(&mut self, mode: ThemeMode, window: &mut Window, cx: &mut App) {
+        // Split into two short-lived scopes so we can re-borrow `cx`
+        // mutably for the live `Theme::change` after the settings lock
+        // is released.
+        if let Err(e) = self.state.read(cx).set_theme_persist(mode) {
+            tracing::warn!(?e, "set_theme_persist failed");
         }
-        drop(s);
-        cx.notify();
+        crate::ui::app::apply_theme(mode, Some(window), cx);
     }
 }
 
@@ -309,31 +302,37 @@ fn api_key_section(
         )
 }
 
-fn theme_section(current: ThemeMode, cx: &mut Context<SettingsPanel>) -> impl IntoElement {
+fn theme_section(
+    current: ThemeMode,
+    cx: &mut Context<SettingsPanel>,
+) -> impl IntoElement {
     h_flex()
         .gap_2()
         .child(
             Button::new("theme-light")
                 .label("Light")
                 .when(current == ThemeMode::Light, |b| b.primary())
-                .on_click(cx.listener(|this, _, _window, cx| {
-                    this.set_theme(ThemeMode::Light, cx);
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.set_theme(ThemeMode::Light, window, cx);
+                    cx.notify();
                 })),
         )
         .child(
             Button::new("theme-dark")
                 .label("Dark")
                 .when(current == ThemeMode::Dark, |b| b.primary())
-                .on_click(cx.listener(|this, _, _window, cx| {
-                    this.set_theme(ThemeMode::Dark, cx);
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.set_theme(ThemeMode::Dark, window, cx);
+                    cx.notify();
                 })),
         )
         .child(
             Button::new("theme-system")
                 .label("System")
                 .when(current == ThemeMode::System, |b| b.primary())
-                .on_click(cx.listener(|this, _, _window, cx| {
-                    this.set_theme(ThemeMode::System, cx);
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.set_theme(ThemeMode::System, window, cx);
+                    cx.notify();
                 })),
         )
 }
