@@ -10,5 +10,6 @@ pub mod session;
 pub mod settings;
 pub mod storage;
 pub mod stream;
+pub mod test_support;
 pub mod theme;
 pub mod turn;

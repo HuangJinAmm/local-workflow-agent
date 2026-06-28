@@ -8,7 +8,7 @@ use crate::ui::app::AppState;
 use crate::ui::input::input_bar::InputBar;
 use crate::ui::model::{BlockKind, Role, UiBlock, UiMessage};
 use crate::ui::stream::StreamEvent;
-use crate::ui::turn::{make_user_message, new_request, TurnEvent};
+use crate::ui::turn::{make_user_message, new_request, run_turn, with_app_tools, TurnEvent};
 
 pub struct SessionView {
     pub state: Entity<AppState>,
@@ -85,26 +85,29 @@ impl SessionView {
             blocks: vec![],
         });
 
-        // Build request.
-        let request = new_request(
-            "claude-sonnet-4-5",
-            1024,
-            vec![make_user_message(&self.input, &[])],
-        );
+        // Build request. ProviderRequest is provider-agnostic; run_turn
+        // dispatches to the right `LlmProvider` based on settings.
+        let state = self.state.read(cx);
+        let model = state.settings.read().default_model.clone();
+        let user_msg = make_user_message(&self.input, &[]);
+        let mut request = new_request(&model, 1024, vec![user_msg]);
+        request = with_app_tools(request, &state);
 
         // Mark streaming, allocate cancel token, clear input.
         let cancel = self.state.read(cx).begin_turn(session_id.clone());
         self.cancel_token = Some(cancel.clone());
         self.phase = Phase::Streaming;
         let _ = std::mem::take(&mut self.input);
+        let _ = state; // release the read guard before notify
         cx.notify();
 
         // Spawn the producer on the tokio runtime owned by AppState.
         let runtime = self.state.read(cx).runtime.clone();
+        let providers = self.state.read(cx).providers.clone();
         let (tx, rx) = tokio::sync::mpsc::channel::<TurnEvent>(64);
         let session_id_for_turn = session_id.clone();
         runtime.spawn(async move {
-            run_turn_stub(session_id_for_turn, request, tx, cancel).await;
+            run_turn(&providers, session_id_for_turn, request, tx, cancel).await;
         });
 
         // Spawn the consumer on the GPUI executor so it can update the entity.
@@ -158,33 +161,6 @@ impl SessionView {
             _ => {}
         }
     }
-}
-
-/// Stub for the demo path. The real `run_turn` is wired in Task 26.
-async fn run_turn_stub(
-    session_id: String,
-    _request: crate::api::CreateMessageRequest,
-    sink: tokio::sync::mpsc::Sender<TurnEvent>,
-    _cancel: tokio_util::sync::CancellationToken,
-) {
-    let _ = sink
-        .send(TurnEvent::Stream(StreamEvent::MessageStart {
-            id: "demo".into(),
-            model: "demo".into(),
-        }))
-        .await;
-    let _ = sink
-        .send(TurnEvent::Stream(StreamEvent::TextDelta {
-            block: 0,
-            text: "(stub: no provider registered — see Task 26 for live wiring)".into(),
-        }))
-        .await;
-    let _ = sink
-        .send(TurnEvent::Done {
-            stop_reason: "end_turn".into(),
-        })
-        .await;
-    let _ = session_id;
 }
 
 impl Render for SessionView {

@@ -9,6 +9,7 @@ use parking_lot::RwLock;
 use tokio::runtime::Runtime;
 use tokio_util::sync::CancellationToken;
 
+use crate::api::client::ClientConfig;
 use crate::api::registry::ProviderRegistry;
 use crate::core::sqlite_storage::SqliteSessionStore;
 use crate::tools::{all_tools, Tool};
@@ -45,7 +46,14 @@ impl AppState {
         let messages = Arc::new(MessageStore::open(&db_path)?);
         let storage = Arc::new(SqliteSessionStore::open(&db_path)?);
 
-        let providers = Arc::new(ProviderRegistry::new());
+        // Build the provider registry from environment + auth store so that
+        // any provider with credentials (Anthropic, OpenAI, DeepSeek, etc.)
+        // becomes selectable in the UI. The Anthropic provider is always
+        // registered — it'll surface a "missing API key" error at stream
+        // time if no key is configured.
+        let providers = Arc::new(ProviderRegistry::from_environment_with_auth_store(
+            ClientConfig::default(),
+        ));
         let tools: Vec<Box<dyn Tool>> = all_tools();
         let settings = Arc::new(RwLock::new(Settings::default()));
 

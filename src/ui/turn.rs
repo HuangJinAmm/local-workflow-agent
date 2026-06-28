@@ -1,15 +1,28 @@
 // ui::turn — the agent turn loop. Pulls events from the provider, accumulates
 // into UiMessage, persists, executes tool calls, and loops until end_turn or cancel.
 
+use std::path::Path;
+use std::sync::Arc;
+
+use base64::engine::general_purpose::STANDARD as B64;
+use base64::Engine as _;
+use futures::StreamExt;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, warn};
+use tracing::debug;
 
+use crate::api::provider_types::{ProviderRequest, StreamEvent as PStream};
+use crate::api::registry::ProviderRegistry;
 use crate::core::provider_id::ProviderId;
+use crate::core::types::{
+    ContentBlock, DocumentSource, ImageSource, Message, MessageContent, Role,
+};
+use crate::core::ToolDefinition;
 
 use super::app::AppState;
 use super::model::*;
 use super::stream::StreamEvent;
+use super::provider::unified::Translator;
 
 pub type EventSink = mpsc::Sender<TurnEvent>;
 
@@ -24,96 +37,228 @@ pub enum TurnEvent {
 }
 
 pub async fn run_turn(
-    state: &AppState,
+    providers: &ProviderRegistry,
     session_id: SessionId,
-    request: crate::api::CreateMessageRequest,
+    request: ProviderRequest,
     sink: EventSink,
     cancel: CancellationToken,
 ) {
-    debug!(?session_id, "turn starting");
+    debug!(?session_id, model = %request.model, "turn starting");
 
-    // Provider lookup. The current registry is empty (Task 12 used
-    // ProviderRegistry::new()), so this fails — that's expected. A
-    // later task will wire a real registry populated from env vars.
-    //
-    // Note: ProviderRegistry exposes `get(&ProviderId)`, not
-    // `get_for_model(&str)`. We attempt a heuristic lookup by treating
-    // the model name as a ProviderId. With an empty registry this
-    // always returns `None`.
+    // Pick the provider that owns this model. We currently treat the model
+    // name as a ProviderId — that works for the canonical "anthropic"/"openai"
+    // names but is a placeholder for arbitrary model aliases. A follow-up
+    // task can switch to settings-driven provider selection.
     let provider_id = ProviderId::new(request.model.clone());
-    let provider = match state.providers.get(&provider_id) {
-        Some(p) => p,
-        None => {
+    let provider = match providers.get(&provider_id) {
+        Some(p) => Arc::clone(p),
+        None => match providers.default_provider() {
+            Some(p) => Arc::clone(p),
+            None => {
+                let _ = sink
+                    .send(TurnEvent::Failed {
+                        message: format!(
+                            "no provider registered (model='{}' or default)",
+                            request.model
+                        ),
+                        retryable: false,
+                    })
+                    .await;
+                return;
+            }
+        },
+    };
+
+    let mut stream = match provider.create_message_stream(request).await {
+        Ok(s) => s,
+        Err(e) => {
             let _ = sink
                 .send(TurnEvent::Failed {
-                    message: format!("provider lookup: '{}' not registered", provider_id),
-                    retryable: false,
+                    message: format!("create_message_stream: {e}"),
+                    retryable: true,
                 })
                 .await;
             return;
         }
     };
 
-    // TODO(ui-turn): The current `LlmProvider` trait exposes
-    // `create_message_stream(&ProviderRequest) -> Stream<Item = Result<api::provider_types::StreamEvent, _>>`,
-    // which differs from this driver in two ways:
-    //   1. The request type is `ProviderRequest`, not `CreateMessageRequest`.
-    //   2. The stream item is `api::provider_types::StreamEvent`, not
-    //      `ui::stream::StreamEvent` (the one wrapped in `TurnEvent::Stream`).
-    // Wiring the real call requires a `CreateMessageRequest -> ProviderRequest`
-    // adapter and a per-provider `StreamEvent` translator (see
-    // `ui::provider::anthropic::translate` for the existing Anthropic one).
-    // That work is deferred to a follow-up task; the rest of the function
-    // body below is intentionally guarded behind a temporary `Failed`
-    // emission so the file compiles and the function shape is in place.
-    let _ = provider;
-    let _ = cancel;
-    let _ = request;
-    warn!(
-        ?session_id,
-        "run_turn: provider stream wiring deferred; emitting Failed"
-    );
-    let _ = sink
-        .send(TurnEvent::Failed {
-            message: "provider stream wiring deferred (see TODO in src/ui/turn.rs)".into(),
-            retryable: false,
-        })
-        .await;
+    let mut translator = Translator::new();
+    let mut saw_message_stop = false;
+
+    loop {
+        tokio::select! {
+            _ = cancel.cancelled() => {
+                // Drop the stream to abort the in-flight HTTP read.
+                drop(stream);
+                let _ = sink.send(TurnEvent::Cancelled).await;
+                return;
+            }
+            next = stream.next() => {
+                let Some(item) = next else {
+                    // Stream ended without an explicit MessageStop.
+                    // Synthesize a final stop event so the UI sees a
+                    // clean Done with the buffered stop_reason (or the
+                    // end_turn default).
+                    let evs = translator.push(PStream::MessageStop);
+                    for ev in evs {
+                        if let StreamEvent::MessageStop { stop_reason, .. } = &ev {
+                            let _ = sink
+                                .send(TurnEvent::Done {
+                                    stop_reason: stop_reason.clone(),
+                                })
+                                .await;
+                            saw_message_stop = true;
+                        }
+                        let _ = sink.send(TurnEvent::Stream(ev)).await;
+                    }
+                    if !saw_message_stop {
+                        let _ = sink
+                            .send(TurnEvent::Done {
+                                stop_reason: "end_turn".into(),
+                            })
+                            .await;
+                    }
+                    return;
+                };
+                match item {
+                    Ok(pev) => {
+                        let evs = translator.push(pev);
+                        for ev in &evs {
+                            let _ = sink.send(TurnEvent::Stream(ev.clone())).await;
+                            if let StreamEvent::MessageStop { stop_reason, .. } = ev {
+                                let _ = sink
+                                    .send(TurnEvent::Done {
+                                        stop_reason: stop_reason.clone(),
+                                    })
+                                    .await;
+                                saw_message_stop = true;
+                            }
+                        }
+                        if saw_message_stop {
+                            return;
+                        }
+                    }
+                    Err(e) => {
+                        let _ = sink.send(TurnEvent::Failed {
+                            message: format!("stream error: {e}"),
+                            retryable: true,
+                        }).await;
+                        return;
+                    }
+                }
+            }
+        }
+    }
 }
 
-pub fn make_user_message(text: &str, attachments: &[Attachment]) -> crate::api::ApiMessage {
-    let mut blocks: Vec<serde_json::Value> = Vec::new();
-    if !attachments.is_empty() {
-        let items: Vec<serde_json::Value> = attachments
-            .iter()
-            .map(|a| {
-                serde_json::json!({
-                    "id": a.id,
-                    "kind": format!("{:?}", a.kind),
-                    "display_name": a.display_name,
-                    "mime": a.mime,
-                    "local_path": a.local_path.to_string_lossy(),
-                    "size_bytes": a.size_bytes,
-                })
+/// Build a `User` `core::types::Message` from a text prompt and any
+/// attached files. Image and PDF attachments are inlined as base64
+/// `Image` / `Document` blocks; text attachments are inlined as text.
+pub fn make_user_message(text: &str, attachments: &[Attachment]) -> Message {
+    let mut blocks: Vec<ContentBlock> = Vec::new();
+    for att in attachments {
+        if let Some(cb) = attachment_to_content_block(att) {
+            blocks.push(cb);
+        }
+    }
+    blocks.push(ContentBlock::Text { text: text.to_string() });
+    Message {
+        role: Role::User,
+        content: MessageContent::Blocks(blocks),
+        uuid: None,
+        cost: None,
+        snapshot_patch: None,
+    }
+}
+
+/// Convert a UI attachment to a `core::types::ContentBlock`. Returns `None`
+/// if the file can't be read.
+fn attachment_to_content_block(att: &Attachment) -> Option<ContentBlock> {
+    match att.kind {
+        AttachmentKind::Image => {
+            let data = std::fs::read(&att.local_path).ok()?;
+            Some(ContentBlock::Image {
+                source: ImageSource {
+                    source_type: "base64".into(),
+                    media_type: Some(att.mime.clone()),
+                    data: Some(B64.encode(&data)),
+                    url: None,
+                },
             })
-            .collect();
-        blocks.push(serde_json::json!({ "type": "attachments", "items": items }));
-    }
-    blocks.push(serde_json::json!({ "type": "text", "text": text }));
-    crate::api::ApiMessage {
-        role: "user".into(),
-        content: serde_json::Value::Array(blocks),
+        }
+        AttachmentKind::Pdf => {
+            let data = std::fs::read(&att.local_path).ok()?;
+            Some(ContentBlock::Document {
+                source: DocumentSource {
+                    source_type: "base64".into(),
+                    media_type: Some(att.mime.clone()),
+                    data: Some(B64.encode(&data)),
+                    url: None,
+                },
+                title: Some(att.display_name.clone()),
+                context: None,
+                citations: None,
+            })
+        }
+        AttachmentKind::Text => {
+            let body = std::fs::read_to_string(&att.local_path).ok()?;
+            Some(ContentBlock::Document {
+                source: DocumentSource {
+                    source_type: "text".into(),
+                    media_type: Some(att.mime.clone()),
+                    data: Some(body),
+                    url: None,
+                },
+                title: Some(att.display_name.clone()),
+                context: None,
+                citations: None,
+            })
+        }
     }
 }
 
-pub fn new_request(
-    model: &str,
-    max_tokens: u32,
-    messages: Vec<crate::api::ApiMessage>,
-) -> crate::api::CreateMessageRequest {
-    let mut b = crate::api::CreateMessageRequest::builder(model, max_tokens);
-    for m in messages {
-        b = b.add_message(m);
+/// Build a `ProviderRequest` from the model name and the conversation
+/// history. Tools are supplied from the `AppState` registry; system
+/// prompt is left to the caller via `with_system_prompt`.
+pub fn new_request(model: &str, max_tokens: u32, messages: Vec<Message>) -> ProviderRequest {
+    ProviderRequest {
+        model: model.to_string(),
+        messages,
+        system_prompt: None,
+        tools: Vec::new(),
+        max_tokens,
+        temperature: None,
+        top_p: None,
+        top_k: None,
+        stop_sequences: Vec::new(),
+        thinking: None,
+        provider_options: serde_json::Value::Object(Default::default()),
     }
-    b.build()
+}
+
+/// Attach a system prompt to a request builder chain.
+pub fn with_system_prompt(mut req: ProviderRequest, system: impl Into<String>) -> ProviderRequest {
+    req.system_prompt = Some(crate::api::provider_types::SystemPrompt::Text(system.into()));
+    req
+}
+
+/// Attach the tool definitions from an `AppState` to a request.
+pub fn with_app_tools(mut req: ProviderRequest, state: &AppState) -> ProviderRequest {
+    req.tools = state
+        .tools
+        .iter()
+        .map(|t| ToolDefinition {
+            name: t.name().to_string(),
+            description: t.description().to_string(),
+            input_schema: t.input_schema(),
+        })
+        .collect();
+    req
+}
+
+/// Path to the binary used for the running session (placeholder helper
+/// for code that needs to anchor a session to the project root).
+#[allow(dead_code)]
+pub fn working_dir_marker(p: &Path) -> &Path {
+    p
 }
