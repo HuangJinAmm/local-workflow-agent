@@ -158,6 +158,13 @@ impl Render for SettingsPanel {
             .as_deref()
             .map(|s| !s.is_empty())
             .unwrap_or(false);
+        // Clone the input entities out of `self` here (we have `&mut self`)
+        // so the helper functions below don't need to re-borrow this entity
+        // via `entity.read(cx)`. That re-borrow is a re-entrancy error in
+        // gpui 0.2.2 — the entity is "already being updated" while its
+        // Render method is running.
+        let anthropic_input = self.key_inputs.get("anthropic").cloned();
+        let openai_input = self.key_inputs.get("openai").cloned();
 
         v_flex()
             .size_full()
@@ -169,8 +176,20 @@ impl Render for SettingsPanel {
             .child(provider_section(current_provider.clone(), cx))
             .child(model_section(current_model.clone(), cx))
             .child(Label::new("API keys").font_bold().text_color(cx.global::<Theme>().foreground))
-            .child(api_key_section("anthropic", "Anthropic key", anthropic_key_set, cx))
-            .child(api_key_section("openai", "OpenAI key", openai_key_set, cx))
+            .child(api_key_section(
+                "anthropic",
+                "Anthropic key",
+                anthropic_key_set,
+                anthropic_input,
+                cx,
+            ))
+            .child(api_key_section(
+                "openai",
+                "OpenAI key",
+                openai_key_set,
+                openai_input,
+                cx,
+            ))
             .child(Label::new("Theme").font_bold().text_color(cx.global::<Theme>().foreground))
             .child(theme_section(current_theme, cx))
             .child(Label::new("Tool policy").font_bold().text_color(cx.global::<Theme>().foreground))
@@ -264,14 +283,10 @@ fn api_key_section(
     provider: &'static str,
     label: &'static str,
     key_set: bool,
+    input: Option<Entity<InputState>>,
     cx: &mut Context<SettingsPanel>,
 ) -> impl IntoElement {
     let theme = cx.global::<Theme>();
-    let input = {
-        let entity = cx.entity();
-        let panel = entity.read(cx);
-        panel.key_inputs.get(provider).cloned()
-    };
     let Some(input) = input else {
         return v_flex()
             .gap_1()
