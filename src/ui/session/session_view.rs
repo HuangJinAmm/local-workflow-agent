@@ -2,13 +2,21 @@
 
 use gpui::*;
 use gpui_component::label::Label;
-use gpui_component::{v_flex, Theme};
+use gpui_component::{v_flex, ActiveTheme};
 
 use crate::ui::app::AppState;
 use crate::ui::input::input_bar::InputBar;
 use crate::ui::model::{BlockKind, Role, UiBlock, UiMessage};
+use crate::ui::session::message::render_message;
 use crate::ui::stream::StreamEvent;
 use crate::ui::turn::{make_user_message, new_request, run_turn, with_app_tools, TurnEvent};
+
+/// A unit action fired by Ctrl/Cmd+V. The handler reads the clipboard and
+/// appends its text content to the focused input bar. `pub` so the GUI
+/// binary can `KeyBinding::new(..., Paste, ...)` it.
+#[derive(Clone, PartialEq, Default, Debug, gpui::Action)]
+#[action(namespace = session_view)]
+pub struct Paste;
 
 pub struct SessionView {
     pub state: Entity<AppState>,
@@ -17,6 +25,7 @@ pub struct SessionView {
     pub input: String,
     pub phase: Phase,
     pub cancel_token: Option<tokio_util::sync::CancellationToken>,
+    pub input_bar: Entity<InputBar>,
 }
 
 /// One user/assistant message plus the blocks we've already rendered for it.
@@ -32,7 +41,8 @@ pub enum Phase {
 }
 
 impl SessionView {
-    pub fn new(state: Entity<AppState>) -> Self {
+    pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
+        let input_bar = cx.new(|_| InputBar::new(state.clone()));
         Self {
             state,
             session_id: None,
@@ -40,6 +50,7 @@ impl SessionView {
             input: String::new(),
             phase: Phase::Idle,
             cancel_token: None,
+            input_bar,
         }
     }
 
@@ -181,15 +192,100 @@ impl SessionView {
 }
 
 impl Render for SessionView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let state = self.state.clone();
-        let input_bar = cx.new(move |_| InputBar::new(state));
-        let theme = cx.global::<Theme>();
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let input_bar = self.input_bar.clone();
+
+        // Snapshot every theme color we need up front so we can release the
+        // immutable borrow of `cx` (held by `cx.global::<Theme>()`) before we
+        // take a mutable borrow of `cx` for `render_message`.
+        let theme_bg = cx.theme().background;
+        let theme_border = cx.theme().border;
+        let theme_muted_fg = cx.theme().muted_foreground;
+
+        // Take a snapshot of the messages so we can iterate without holding a
+        // borrow of `self` across the recursive `render_message` calls (which
+        // need `&mut App`).
+        let messages: Vec<(UiMessage, Vec<UiBlock>)> = self
+            .messages
+            .iter()
+            .map(|m| (m.msg.clone(), m.blocks.clone()))
+            .collect();
+        let has_session = self.session_id.is_some();
+        let is_streaming = self.phase == Phase::Streaming;
+
+        // We need `&mut App` for `render_message` -> `TextView::markdown`.
+        // `Context<Self>` derefs to `App`, so reborrow.
+        let app: &mut App = &mut *cx;
+
+        let body = if has_session {
+            // `overflow_y_scroll` lives on `StatefulInteractiveElement`, which
+            // requires `.id(...)` first. We use a fixed id so the scrollable
+            // region is stable across renders.
+            div()
+                .id("session-messages-scroll")
+                .flex_1()
+                .size_full()
+                .overflow_y_scroll()
+                .p_2()
+                .gap_2()
+                .children(
+                    messages
+                        .iter()
+                        .map(|(msg, blocks)| render_message(msg, blocks, window, app)),
+                )
+                .into_any_element()
+        } else {
+            div()
+                .flex_1()
+                .size_full()
+                .items_center()
+                .justify_center()
+                .child(
+                    Label::new("No session selected").text_color(theme_muted_fg),
+                )
+                .into_any_element()
+        };
+
+        // Drag-and-drop listener: when files are dropped on the session
+        // view, hand them to the input bar for ingestion.
+        let on_drop_paths = cx.listener(|this, paths: &ExternalPaths, _window, cx| {
+            this.input_bar.update(cx, |bar, ctx| {
+                bar.ingest_paths(paths.paths().to_vec(), ctx);
+            });
+        });
+
+        // Clipboard paste listener: Ctrl/Cmd+V -> read the clipboard text
+        // and append to the focused input bar. The action is bound by the
+        // GUI binary to global keys.
+        let on_paste = cx.listener(|this, _action: &Paste, _window, cx| {
+            if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+                this.input_bar.update(cx, |bar, ctx| {
+                    bar.append_text(&text, ctx);
+                });
+            }
+        });
+
         v_flex()
             .size_full()
-            .bg(theme.background)
-            .child(div().flex_1().items_center().justify_center()
-                .child(Label::new("No session selected").text_color(theme.muted_foreground)))
-            .child(input_bar)
+            .bg(theme_bg)
+            .on_drop::<ExternalPaths>(on_drop_paths)
+            .on_action(on_paste)
+            .child(body)
+            .child(
+                v_flex()
+                    .w_full()
+                    .p_2()
+                    .border_t_1()
+                    .border_color(theme_border)
+                    .child(input_bar)
+                    .children(if is_streaming {
+                        Some(
+                            Label::new("streaming… (Esc to cancel)")
+                                .text_color(theme_muted_fg),
+                        )
+                    } else {
+                        None
+                    }),
+            )
     }
 }

@@ -33,7 +33,7 @@ impl Render for AppView {
         let session_list = cx.new(|_| SessionListView::new(storage));
         let session_view = cx.new({
             let state = self.state.clone();
-            move |_| SessionView::new(state)
+            move |cx| SessionView::new(state, cx)
         });
         let settings = cx.new({
             let state = self.state.clone();

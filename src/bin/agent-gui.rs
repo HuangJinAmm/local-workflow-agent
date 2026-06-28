@@ -4,6 +4,7 @@ use gpui::*;
 use gpui_component::*;
 use local_workflow_agent::ui::app::AppState;
 use local_workflow_agent::ui::app_view::AppView;
+use local_workflow_agent::ui::session::session_view::Paste;
 
 use gpui::actions;
 actions!(agent_gui, [NewSession, ToggleTheme, OpenSettings, CancelTurn]);
@@ -21,6 +22,8 @@ fn main() -> anyhow::Result<()> {
             KeyBinding::new("cmd-,", OpenSettings, None),
             KeyBinding::new("ctrl-,", OpenSettings, None),
             KeyBinding::new("escape", CancelTurn, None),
+            KeyBinding::new("cmd-v", Paste, None),
+            KeyBinding::new("ctrl-v", Paste, None),
         ]);
         let working_dir = std::env::current_dir().expect("resolve cwd");
         // For the GUI binary, use a project-local data dir by default so the
@@ -36,20 +39,11 @@ fn main() -> anyhow::Result<()> {
         cx.spawn(async move |cx| {
             cx.open_window(WindowOptions::default(), |window, cx| {
                 let view = cx.new(|cx| AppView::new(state, window, cx));
-
-                // TODO(Task 19): wire drag-and-drop file ingestion + clipboard paste.
-                //
-                // gpui 0.2.2 does not expose a `WindowEvent` enum; the
-                // platform-level `FileDropEvent` (a `MouseEvent`) is delivered
-                // through the paint-phase mouse listener pipeline, and
-                // clipboard paste is exposed as a `Paste` `Action` rather than
-                // a window event. Implementing both here would require
-                // touching `AppView::render` (paint-phase `on_mouse_event`)
-                // and registering an `on_action(Paste)` handler on the root
-                // view, which is out of scope for this task. The 📎 button
-                // in `input_bar` (Task 18) is the primary attach path; drop
-                // and paste are deferred.
-
+                // Drag-and-drop + clipboard paste are wired in
+                // `SessionView::Render` (on the v_flex that wraps the messages
+                // + input bar). The Paste action is dispatched to the focused
+                // view; the input bar reads the clipboard via App and appends
+                // text to its buffer.
                 cx.new(|cx| Root::new(view, window, cx))
             })?;
             Ok::<_, anyhow::Error>(())
