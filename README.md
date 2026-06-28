@@ -7,7 +7,7 @@ top.
 
 - **Library** (`local_workflow_agent::...`) — wraps Anthropic and OpenAI
   (plus OpenAI-compatible) providers behind an `LlmProvider` trait, a
-  `tools` registry, persistent SQLite storage, and an MCP client.
+  `tools` registry, persistent embedded Turso storage, and an MCP client.
 - **Non-GUI demo** (`cargo run`) — walks through three layers: direct
   tool invocation, building tool definitions, and an LLM-driven agent
   loop. Parts 1 + 2 work without an API key.
@@ -66,7 +66,8 @@ Default data directory:
 
 API keys are stored in plaintext in `<data-dir>/settings.json`. Session
 history lives in `<data-dir>/sessions.sqlite`; attachments are written
-under `<data-dir>/attachments/`.
+under `<data-dir>/attachments/`. The local database is backed by the
+embedded `turso` crate.
 
 ## Project layout
 
@@ -75,7 +76,7 @@ src/
   api/             # LlmProvider trait, Anthropic + OpenAI clients,
                    #   request/response types, model registry
   core/            # Config, cost tracker, file history, permissions,
-                   #   SQLite store, auth, system prompt, token budget
+                   #   embedded Turso store, auth, system prompt, token budget
   tools/           # Tool trait + built-in tools (bash, file_read /
                    #   write / edit, glob, grep, web_fetch, web_search,
                    #   apply_patch, todo_write, …)
@@ -118,9 +119,10 @@ docs/superpowers/  # Design spec + implementation plan
   as fields. Recreating them in `Render` would discard selection and
   in-memory state on every redraw.
 - **`SqliteSessionStore`** persists sessions and per-session message
-  history. The GUI's `load_session` reads from this store; submitting
-  a turn currently keeps message bodies in memory only (persisting
-  the bodies is tracked as follow-up).
+  history using the embedded `turso` database engine. The GUI's
+  `load_session` reads from this store; submitting a turn currently
+  keeps message bodies in memory only (persisting the bodies is
+  tracked as follow-up).
 
 ## Tool permissions
 
