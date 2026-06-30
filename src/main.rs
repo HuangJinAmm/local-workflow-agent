@@ -4,15 +4,20 @@
 //   1. Direct tool invocation — use the tool system without an LLM (reads
 //      Cargo.toml and globs for source files). Works without an API key.
 //   2. Building tool definitions — converts tools into the API wire format.
-//   3. LLM-driven agent loop — sends tools to the model, executes the
-//      tool_use blocks it returns, and loops until the turn ends.
+//   3. LLM-driven agent loop — drives a multi-round conversation via the
+//      shared `run_turn` helper (streaming + tool-use), printing events as
+//      they arrive.
 //
 // Set ANTHROPIC_API_KEY to run part 3:
 //     $env:ANTHROPIC_API_KEY = "sk-ant-..."
 //     cargo run
 
-use local_workflow_agent::api::client::{AnthropicClient, ClientConfig};
-use local_workflow_agent::api::{ApiMessage, ApiToolDefinition, CreateMessageRequest};
+use local_workflow_agent::agent::{run_turn, TurnEvent};
+use local_workflow_agent::api::client::ClientConfig;
+use local_workflow_agent::api::provider::LlmProvider;
+use local_workflow_agent::api::provider_types::ProviderRequest;
+use local_workflow_agent::api::providers::AnthropicProvider;
+use local_workflow_agent::api::ApiToolDefinition;
 use local_workflow_agent::core::config::{Config, PermissionMode};
 use local_workflow_agent::core::constants::{
     ANTHROPIC_API_BASE, ANTHROPIC_API_VERSION, ANTHROPIC_BETA_HEADER, DEFAULT_MAX_TOKENS,
@@ -21,13 +26,15 @@ use local_workflow_agent::core::constants::{
 use local_workflow_agent::core::file_history::FileHistory;
 use local_workflow_agent::core::permissions::{AutoPermissionHandler, PermissionHandler};
 use local_workflow_agent::core::cost::CostTracker;
+use local_workflow_agent::core::types::{Message, ToolResultContent};
 use local_workflow_agent::tools::{
-    all_tools, find_tool, FileReadTool, GlobTool, GrepTool, Tool, ToolContext, ToolResult,
+    all_tools, FileReadTool, GlobTool, GrepTool, Tool, ToolContext, ToolResult,
 };
-use serde_json::{json, Value};
+use serde_json::json;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -89,8 +96,11 @@ async fn main() -> anyhow::Result<()> {
 
     // -----------------------------------------------------------------
     // Part 3: LLM-driven agent loop (requires ANTHROPIC_API_KEY)
+    //
+    // Uses the shared `run_turn` helper (src/agent/turn.rs) instead of a
+    // hand-rolled loop. This gives us streaming + tool-use for free.
     // -----------------------------------------------------------------
-    println!("\n--- Part 3: LLM agent loop ---");
+    println!("\n--- Part 3: LLM agent loop (via run_turn) ---");
 
     let api_key = std::env::var("ANTHROPIC_API_KEY").unwrap_or_else(|_| {
         eprintln!("\nANTHROPIC_API_KEY not set — skipping LLM loop.");
@@ -99,173 +109,112 @@ async fn main() -> anyhow::Result<()> {
         std::process::exit(0);
     });
 
-    let client = AnthropicClient::new(ClientConfig {
+    let client_config = ClientConfig {
         api_key,
         api_base: ANTHROPIC_API_BASE.to_string(),
         api_version: ANTHROPIC_API_VERSION.to_string(),
         beta_features: ANTHROPIC_BETA_HEADER.to_string(),
         use_bearer_auth: false,
         ..Default::default()
-    })?;
+    };
+    let provider: Arc<dyn LlmProvider> = Arc::new(AnthropicProvider::from_config(client_config));
 
-    run_agent_loop(&client, &tool_defs, &tools, &tool_ctx, &working_dir).await?;
-
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// Agent loop: send messages → execute tool_use blocks → loop until end_turn
-// ---------------------------------------------------------------------------
-
-async fn run_agent_loop(
-    client: &AnthropicClient,
-    tool_defs: &[ApiToolDefinition],
-    tools: &[Box<dyn Tool>],
-    tool_ctx: &ToolContext,
-    working_dir: &std::path::Path,
-) -> anyhow::Result<()> {
     let user_prompt = format!(
         "List the top-level modules in this Rust project by reading src/lib.rs, \
          then briefly describe what each module is for. The project root is {}.",
         working_dir.display()
     );
 
-    let mut messages: Vec<ApiMessage> = vec![ApiMessage {
-        role: "user".to_string(),
-        content: json!(user_prompt),
-    }];
+    // Build a ProviderRequest with all tools exposed to the model.
+    let tool_definitions: Vec<_> = tools.iter().map(|t| t.to_definition()).collect();
+    let request = ProviderRequest {
+        model: DEFAULT_MODEL.to_string(),
+        messages: vec![Message::user(user_prompt)],
+        system_prompt: None,
+        tools: tool_definitions,
+        max_tokens: DEFAULT_MAX_TOKENS,
+        temperature: Some(0.7),
+        top_p: None,
+        top_k: None,
+        stop_sequences: vec![],
+        thinking: None,
+        provider_options: serde_json::Value::Null,
+    };
 
-    const MAX_TURNS: usize = 8;
+    // run_turn takes shared (Arc) handles for tools / context.
+    let tools: Arc<Vec<Box<dyn Tool>>> = Arc::new(tools);
+    let tool_ctx = Arc::new(tool_ctx);
 
-    for turn in 1..=MAX_TURNS {
-        println!("\n=== Turn {} ===", turn);
-        let request = CreateMessageRequest {
-            model: DEFAULT_MODEL.to_string(),
-            max_tokens: DEFAULT_MAX_TOKENS,
-            messages: messages.clone(),
-            system: None,
-            tools: Some(tool_defs.to_vec()),
-            temperature: Some(0.7),
-            top_p: None,
-            top_k: None,
-            stop_sequences: None,
-            stream: false,
-            thinking: None,
-        };
+    let (sink, rx) = async_channel::unbounded::<TurnEvent>();
+    let cancel = CancellationToken::new();
 
-        let response = match client.create_message(request).await {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!("API error on turn {}: {:?}", turn, e);
-                return Ok(());
+    let session_id = "demo".to_string();
+    let handle = tokio::spawn(run_turn(
+        provider,
+        session_id,
+        request,
+        tools,
+        tool_ctx,
+        sink,
+        cancel,
+    ));
+
+    // Consume the TurnEvent stream and print incremental progress.
+    while let Ok(event) = rx.recv().await {
+        match event {
+            TurnEvent::TextDelta { text } => {
+                print!("{}", text);
+                use std::io::Write;
+                let _ = std::io::stdout().flush();
             }
-        };
-
-        let stop = response.stop_reason.as_deref().unwrap_or("unknown");
-        println!("Stop reason: {}", stop);
-
-        // Collect text and tool_use blocks from the response.
-        let mut assistant_text = String::new();
-        let mut tool_use_blocks: Vec<(String, String, Value)> = Vec::new();
-
-        for block in &response.content {
-            match block.get("type").and_then(|v| v.as_str()) {
-                Some("text") => {
-                    if let Some(t) = block.get("text").and_then(|v| v.as_str()) {
-                        assistant_text.push_str(t);
-                    }
+            TurnEvent::ToolUseStart { id, name } => {
+                println!("\n[Tool call] {} ({})", name, id);
+            }
+            TurnEvent::ToolUseDelta { partial_json, .. } => {
+                print!("{}", partial_json);
+                use std::io::Write;
+                let _ = std::io::stdout().flush();
+            }
+            TurnEvent::ToolEnd { result, is_error, .. } => {
+                let content = match result {
+                    ToolResultContent::Text(t) => t,
+                    ToolResultContent::Blocks(_) => "[complex content]".to_string(),
+                };
+                let preview = if content.len() > 800 {
+                    format!("{}...(truncated, {} chars total)", &content[..800], content.len())
+                } else {
+                    content
+                };
+                let label = if is_error { "ERROR" } else { "result" };
+                println!("  {}: {}", label, preview);
+            }
+            TurnEvent::Done { stop_reason, usage } => {
+                println!("\n=== Agent finished ===");
+                if let Some(sr) = stop_reason {
+                    println!("Stop reason: {:?}", sr);
                 }
-                Some("tool_use") => {
-                    let id = block.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    let name = block.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    let input = block.get("input").cloned().unwrap_or(Value::Null);
-                    tool_use_blocks.push((id, name, input));
+                if let Some(u) = usage {
+                    println!(
+                        "Tokens: input={}, output={}",
+                        u.input_tokens, u.output_tokens
+                    );
                 }
-                _ => {}
+            }
+            TurnEvent::Failed { error } => {
+                eprintln!("\n[Agent failed] {:?}", error);
+            }
+            TurnEvent::Cancelled => {
+                println!("\n[Agent cancelled]");
             }
         }
+    }
 
-        if !assistant_text.is_empty() {
-            println!("\n[Assistant]\n{}", assistant_text);
-        }
-
-        // No tool calls → turn is complete.
-        if tool_use_blocks.is_empty() {
-            println!("\n=== Agent finished ===");
-            println!(
-                "Tokens: input={}, output={}",
-                response.usage.input_tokens, response.usage.output_tokens
-            );
-            break;
-        }
-
-        // Append the assistant message (with its tool_use blocks) to history.
-        messages.push(ApiMessage {
-            role: "assistant".to_string(),
-            content: serde_json::to_value(&response.content).unwrap_or(Value::Null),
-        });
-
-        // Execute each tool_use block and build tool_result content.
-        let mut tool_results: Vec<Value> = Vec::new();
-        for (tool_id, tool_name, tool_input) in &tool_use_blocks {
-            println!("\n[Tool call] {} ({})", tool_name, tool_id);
-            println!("  input: {}", tool_input);
-
-            let result = execute_tool_by_name(tool_name, tool_input, tools, tool_ctx).await;
-            let content = if result.is_error {
-                format!("[ERROR] {}", result.content)
-            } else {
-                result.content.clone()
-            };
-
-            // Truncate very long tool output for readability (preview only).
-            let preview = if content.len() > 800 {
-                format!("{}...(truncated, {} chars total)", &content[..800], content.len())
-            } else {
-                content.clone()
-            };
-            println!("  result: {}", preview);
-
-            tool_results.push(json!({
-                "type": "tool_result",
-                "tool_use_id": tool_id,
-                "content": content,
-                "is_error": result.is_error,
-            }));
-        }
-
-        // Append the tool results as a user message.
-        messages.push(ApiMessage {
-            role: "user".to_string(),
-            content: Value::Array(tool_results),
-        });
-
-        if turn == MAX_TURNS {
-            println!("\nReached max turns ({}), stopping.", MAX_TURNS);
-        }
+    // Surface a panic from the run_turn task if one occurred.
+    if let Err(e) = handle.await {
+        eprintln!("[run_turn task panicked] {:?}", e);
     }
 
     Ok(())
-}
-
-/// Execute a tool by name, falling back to an error result if unknown.
-async fn execute_tool_by_name(
-    name: &str,
-    input: &Value,
-    tools: &[Box<dyn Tool>],
-    ctx: &ToolContext,
-) -> ToolResult {
-    // Look up the tool in the provided slice first.
-    for t in tools {
-        if t.name() == name {
-            return t.execute(input.clone(), ctx).await;
-        }
-    }
-    // Fall back to the global registry (covers tools not in the slice).
-    if let Some(t) = find_tool(name) {
-        return t.execute(input.clone(), ctx).await;
-    }
-    ToolResult::error(format!("Unknown tool: {}", name))
 }
 
 // ---------------------------------------------------------------------------
