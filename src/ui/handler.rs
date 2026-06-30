@@ -334,62 +334,25 @@ pub async fn handle_incoming(
         match incoming_response {
             Ok(response) => match response {
                 AgentResponse::TurnEvent(ev) => {
-                    match ev {
-                        TurnEvent::TextDelta { text } => {
-                            // TODO(Task 12): stream into the current assistant
-                            // message via `ChatAI::handle_turn_event`. Until
-                            // then the incremental deltas are not surfaced —
-                            // the full text rendering is wired up in chat.rs.
-                            let _ = text;
-                        }
-                        TurnEvent::ToolUseStart { .. }
-                        | TurnEvent::ToolUseDelta { .. }
-                        | TurnEvent::ToolEnd { .. } => {
-                            // TODO(Task 12): render tool calls in the chat view.
-                        }
-                        TurnEvent::Done { .. } => {
-                            if let Some(view) = this.upgrade() {
-                                let _ = cx.update_entity(&view, |this, cx| {
-                                    this.set_loading(false, cx);
-                                });
-                            }
-                        }
-                        TurnEvent::Failed { error } => {
-                            if let Some(view) = this.upgrade() {
-                                let _ = cx.update_entity(&view, |this, cx| {
-                                    this.add_message(
-                                        UiMessage::error(error.to_string()),
-                                        cx,
-                                    );
-                                    this.set_loading(false, cx);
-                                });
-                            }
-                        }
-                        TurnEvent::Cancelled => {
-                            if let Some(view) = this.upgrade() {
-                                let _ = cx.update_entity(&view, |this, cx| {
-                                    this.set_loading(false, cx);
-                                });
-                            }
-                        }
+                    if let Some(view) = this.upgrade() {
+                        let _ = cx.update_entity(&view, |this, cx| {
+                            this.handle_turn_event(ev, cx);
+                        });
                     }
                 }
-                AgentResponse::PermissionRequest(_req) => {
-                    // TODO(Task 12): call `this.show_permission_modal(req, cx)`.
-                    // Dropping `_req` drops its `reply_tx`, which the
-                    // `GuiPermissionHandler` treats as a denial — acceptable
-                    // until the modal is wired up in chat.rs.
-                    tracing::warn!(
-                        "permission request received; \
-                         show_permission_modal not implemented yet"
-                    );
+                AgentResponse::PermissionRequest(req) => {
+                    if let Some(view) = this.upgrade() {
+                        let _ = cx.update_entity(&view, |this, cx| {
+                            this.show_permission_modal(req, cx);
+                        });
+                    }
                 }
-                AgentResponse::UserQuestion(_ev) => {
-                    // TODO(Task 12): call `this.show_ask_modal(ev, cx)`.
-                    tracing::warn!(
-                        "user question received; \
-                         show_ask_modal not implemented yet"
-                    );
+                AgentResponse::UserQuestion(ev) => {
+                    if let Some(view) = this.upgrade() {
+                        let _ = cx.update_entity(&view, |this, cx| {
+                            this.show_ask_modal(ev, cx);
+                        });
+                    }
                 }
                 AgentResponse::Error(err) => {
                     if let Some(view) = this.upgrade() {

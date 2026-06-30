@@ -122,6 +122,16 @@ impl UiMessage {
         }
     }
 
+    /// Create a new system message (used for status / tool-call annotations).
+    pub fn system(content: impl Into<String>) -> Self {
+        Self {
+            role: MessageRole::System,
+            content: content.into(),
+            timestamp: Utc::now(),
+            metadata: None,
+        }
+    }
+
     /// Create a new tool call message
     #[allow(dead_code)]
     pub fn tool_call(tool_name: String, tool_input: Value) -> Self {
