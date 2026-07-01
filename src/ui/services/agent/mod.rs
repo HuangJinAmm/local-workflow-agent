@@ -4,20 +4,16 @@
 //! `UiMessage`, …) and the `Agent` wrapper that bridges them onto the
 //! `local_workflow_agent` library's `LlmProvider` trait.
 //!
-//! File uploads are still performed via the standalone `upload_file` helper,
-//! which talks to Anthropic's Files API directly.
+//! File uploads are handled by the library's `api::uploads` module; the UI
+//! handler calls it directly.
 
 mod client;
-mod files;
 mod messages;
 mod permission_handler;
 mod types;
 
 // Re-export main client types.
 pub use client::{Agent, AgentBuilder};
-
-// Re-export files API.
-pub use files::upload_file;
 
 // Re-export message types.
 pub use messages::{
@@ -31,7 +27,5 @@ pub use types::{Message, Tool};
 // `ContentBlock` and `ToolDefinition` come from `core::types` via `types.rs`.
 pub use crate::core::types::{ContentBlock, ToolDefinition};
 
-// Re-export the GUI permission handler. The GUI-side `PermissionRequest` is
-// re-exported as `GuiPermissionRequest` to avoid clashing with the library's
-// own `core::permissions::PermissionRequest`.
+// Re-export the GUI permission handler.
 pub use permission_handler::{GuiPermissionHandler, PermissionRequest as GuiPermissionRequest};
