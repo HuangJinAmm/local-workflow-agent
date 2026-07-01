@@ -14,7 +14,7 @@ mod permission_handler;
 mod types;
 
 // Re-export main client types.
-pub use client::{Agent, AgentBuilder, PROVIDER_PRESETS};
+pub use client::{Agent, AgentBuilder};
 
 // Re-export files API.
 pub use files::upload_file;

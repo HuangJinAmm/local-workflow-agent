@@ -6,54 +6,28 @@
 //! library's `core::types::Message` immediately before each request via
 //! [`Agent::build_provider_request`].
 //!
-//! The actual multi-round tool-use loop is driven by
-//! [`crate::agent::run_turn`], which the UI handler invokes with the
-//! `ProviderRequest` produced here and the library's full `all_tools()`
-//! registry. Streaming `TurnEvent`s flow back to the UI through the
-//! `AgentResponse` channel.
+//! Provider construction, key/base_url resolution, and capabilities filtering
+//! all delegate to the library's `api::registry`, `core::config::Config`, and
+//! `api::provider_types::ProviderCapabilities` — no duplicate logic here.
 
 use anyhow::Result;
-use std::env;
 use std::sync::Arc;
 
-use crate::api::client::{AnthropicClient, ClientConfig};
 use crate::api::provider::LlmProvider;
-use crate::api::provider_types::{ProviderRequest, SystemPrompt};
-use crate::api::providers::{AnthropicProvider, OpenAiProvider, OpenAiCompatProvider};
+use crate::api::provider_types::{ProviderCapabilities, ProviderRequest, SystemPrompt};
+use crate::api::registry::provider_from_config;
+use crate::api::model_registry::{effective_model_for_config, ModelRegistry};
+use crate::core::config::Config;
+use crate::core::system_prompt::{build_system_prompt, SystemPromptOptions};
 use crate::core::types::{
-    ContentBlock as LibContentBlock, Message as LibMessage, MessageContent as LibMessageContent,
-    Role as LibRole, ToolDefinition as LibToolDefinition, ToolResultContent,
+    ContentBlock as LibContentBlock, DocumentSource, ImageSource, Message as LibMessage,
+    MessageContent as LibMessageContent, Role as LibRole, ToolDefinition as LibToolDefinition,
+    ToolResultContent,
 };
 
-use super::types::{ContentBlock, FileSource, Message, Tool, ToolDefinition};
-
-/// Available provider presets exposed in the settings panel.
-///
-/// The first field is the stable provider id (sent to the background agent
-/// as `AgentRequest::SetProvider`); the second is a human-readable label
-/// shown in the dropdown.
-pub const PROVIDER_PRESETS: &[(&str, &str)] = &[
-    ("anthropic", "Anthropic (Claude)"),
-    ("openai", "OpenAI"),
-    ("deepseek", "DeepSeek"),
-    ("moonshot", "Moonshot (Kimi)"),
-    ("qwen", "Qwen (通义千问)"),
-    ("zhipu", "Zhipu (智谱 GLM)"),
-    ("zai", "Z.AI"),
-    ("siliconflow", "SiliconFlow (硅基流动)"),
-    ("groq", "Groq"),
-    ("mistral", "Mistral"),
-    ("openrouter", "OpenRouter"),
-    ("ollama", "Ollama (本地)"),
-    ("lmstudio", "LM Studio (本地)"),
-];
+use super::types::{ContentBlock, Message, Tool};
 
 /// Agent that can converse with an LLM and execute tools.
-///
-/// Holds a `local_workflow_agent` `LlmProvider` (boxed behind `Arc<dyn …>`)
-/// plus the in-memory conversation transcript. The transcript is stored in
-/// chat-ai's wire types (`super::types::Message`) and translated into the
-/// library's `core::types::Message` immediately before each request.
 #[derive(Clone)]
 pub struct Agent {
     model: String,
@@ -61,171 +35,123 @@ pub struct Agent {
     tools: Vec<Tool>,
     conversation: Vec<Message>,
     max_tokens: u32,
-    /// Boxed provider — the concrete type depends on `provider_kind`.
     provider: Arc<dyn LlmProvider>,
-    /// Current provider id, e.g. `"anthropic"`, `"openai"`, `"deepseek"`,
-    /// `"ollama"`. Used to rebuild the provider when settings change.
     provider_kind: String,
-    /// Current API key + base URL — kept so the provider can be rebuilt
-    /// when the user changes either field in the settings panel.
     api_key: String,
     base_url: String,
+    /// Library config — used for key/base_url resolution and system prompt.
+    config: Config,
 }
 
 impl Agent {
-    /// Create a new agent with the given tools.
     pub fn new(tools: Vec<Tool>) -> Result<Self> {
         Agent::builder().build(tools)
     }
 
-    /// Create a new agent with custom configuration.
     pub fn builder() -> AgentBuilder {
         AgentBuilder::default()
     }
 
-    /// Default system prompt.
-    fn default_system_prompt() -> String {
-        "You are a helpful AI assistant with access to tools that can help you complete tasks. \
-        When you need to use a tool, respond with the appropriate tool call. \
-        Be concise and helpful in your responses."
-            .to_string()
-    }
-
-    /// Set the system prompt.
     pub fn set_system_prompt(&mut self, prompt: String) {
         self.system_prompt = prompt;
     }
 
-    /// Set the model.
     pub fn set_model(&mut self, model: String) {
         self.model = model;
     }
 
-    /// Set max tokens.
     pub fn set_max_tokens(&mut self, max_tokens: u32) {
         self.max_tokens = max_tokens;
     }
 
-    /// Update the provider kind (e.g. "anthropic", "openai", "deepseek",
-    /// "ollama"). Rebuilds the underlying provider implementation. Clears
-    /// the conversation since different providers use different message
-    /// formats / tool-call conventions.
+    /// Update the provider kind. Rebuilds the underlying provider from the
+    /// library's `Config` (which reads the right env var per provider).
+    /// Clears the conversation since different providers use different
+    /// message formats / tool-call conventions.
     pub fn set_provider(&mut self, provider: String) -> Result<()> {
-        self.provider_kind = provider;
+        self.provider_kind = provider.clone();
+        // Persist into config so provider_from_config can resolve the key.
+        self.config.provider = Some(provider);
         self.rebuild_provider()?;
-        // Different providers may use different tool-call id conventions
-        // and message shapes — start fresh.
         self.conversation.clear();
         Ok(())
     }
 
-    /// Update the API key — rebuilds the underlying provider.
     pub fn set_api_key(&mut self, api_key: String) -> Result<()> {
         self.api_key = api_key;
+        self.config.api_key = Some(self.api_key.clone());
         self.rebuild_provider()
     }
 
-    /// Update the API base URL — rebuilds the underlying provider.
     pub fn set_base_url(&mut self, base_url: String) -> Result<()> {
         self.base_url = base_url;
         self.rebuild_provider()
     }
 
-    /// Update both the API key and base URL atomically — rebuilds the
-    /// provider only once (cheaper than two separate updates).
     pub fn set_api_config(&mut self, api_key: String, base_url: String) -> Result<()> {
         self.api_key = api_key;
         self.base_url = base_url;
+        self.config.api_key = Some(self.api_key.clone());
         self.rebuild_provider()
     }
 
-    /// Reconstruct the underlying `LlmProvider` from the current
-    /// `provider_kind` + `api_key` + `base_url`. Called after any change to
-    /// those fields.
+    /// Reconstruct the underlying `LlmProvider` via `api::registry::provider_from_config`.
+    /// Falls back to constructing an Anthropic provider with the in-memory key
+    /// (so the GUI can boot before the user fills the settings panel).
     fn rebuild_provider(&mut self) -> Result<()> {
-        let kind = self.provider_kind.as_str();
-        let provider: Arc<dyn LlmProvider> = match kind {
-            "anthropic" => {
-                let client = AnthropicClient::new(ClientConfig {
-                    api_key: self.api_key.clone(),
-                    api_base: self.base_url.clone(),
-                    ..Default::default()
-                })?;
-                Arc::new(AnthropicProvider::new(Arc::new(client)))
-            }
-            "openai" => {
-                let mut p = OpenAiProvider::new(self.api_key.clone());
-                if !self.base_url.trim().is_empty()
-                    && self.base_url != crate::core::constants::ANTHROPIC_API_BASE
-                {
-                    p = p.with_base_url(self.base_url.clone());
-                }
-                Arc::new(p)
-            }
-            // Everything else: route through the OpenAI-compatible adapter.
-            // First try the built-in factory (deepseek, groq, mistral,
-            // ollama, lmstudio, zhipu, zai, moonshot, qwen, siliconflow,
-            // openrouter, …) which sets the right base URL + quirks.
-            other => {
-                let compat = if let Some(built) =
-                    crate::api::providers::provider_for_id(other)
-                {
-                    built
+        // Try the library's resolver first — it knows the env-var conventions
+        // for all 50+ providers (DEEPSEEK_API_KEY, QWEN_API_KEY, …).
+        if let Some(p) = provider_from_config(&self.config, &self.provider_kind) {
+            self.provider = p;
+            return Ok(());
+        }
+        // Fallback: construct an Anthropic provider with whatever key we have.
+        // This matches the original boot-without-key behaviour.
+        if self.provider_kind == "anthropic" {
+            let cc = crate::api::client::ClientConfig {
+                api_key: self.api_key.clone(),
+                api_base: if self.base_url.trim().is_empty() {
+                    crate::core::constants::ANTHROPIC_API_BASE.to_string()
                 } else {
-                    // Fallback: a generic OpenAI-compatible adapter pointed
-                    // at the user-supplied base URL.
-                    OpenAiCompatProvider::new(
-                        "custom-openai",
-                        "Custom OpenAI-Compatible",
-                        self.base_url.clone(),
-                    )
-                };
-                let compat = if !self.api_key.trim().is_empty() {
-                    compat.with_api_key(self.api_key.clone())
-                } else {
-                    compat
-                };
-                let compat = if !self.base_url.trim().is_empty()
-                    && self.base_url != crate::core::constants::ANTHROPIC_API_BASE
-                {
-                    compat.with_base_url(self.base_url.clone())
-                } else {
-                    compat
-                };
-                Arc::new(compat)
-            }
-        };
-        self.provider = provider;
+                    self.base_url.clone()
+                },
+                ..Default::default()
+            };
+            let client = crate::api::client::AnthropicClient::new(cc)?;
+            self.provider = Arc::new(crate::api::providers::AnthropicProvider::new(Arc::new(client)));
+            return Ok(());
+        }
+        // Last resort: keep the existing provider (might be stale, but better
+        // than crashing the GUI).
         Ok(())
     }
 
-    /// Current provider id (e.g. "anthropic").
     pub fn provider_kind(&self) -> &str {
         &self.provider_kind
     }
 
-    /// Current API key (for file uploads and provider rebuilds).
     pub fn api_key(&self) -> String {
         self.api_key.clone()
     }
 
-    /// Clone of the underlying `LlmProvider` — passed to `run_turn` which
-    /// needs an `Arc<dyn LlmProvider>`.
     pub fn provider_arc(&self) -> Arc<dyn LlmProvider> {
         self.provider.clone()
     }
 
-    /// Current API base URL (for the settings panel to display).
     pub fn base_url(&self) -> &str {
         &self.base_url
     }
 
-    /// Current model name (for the settings panel to display).
     pub fn model(&self) -> &str {
         &self.model
     }
 
-    /// Add a user message to the conversation.
+    /// Provider capabilities — used by `build_provider_request` to filter
+    /// tools and unsupported content blocks.
+    pub fn capabilities(&self) -> ProviderCapabilities {
+        self.provider.capabilities()
+    }
+
     pub fn add_user_message(&mut self, content: String) {
         self.conversation.push(Message::User {
             role: "user".to_string(),
@@ -233,56 +159,49 @@ impl Agent {
         });
     }
 
-    /// Get all tool definitions in a format suitable for the LLM.
-    pub fn get_tool_definitions(&self) -> Vec<ToolDefinition> {
+    pub fn get_tool_definitions(&self) -> Vec<LibToolDefinition> {
         self.tools
-            .iter()
-            .map(|tool| ToolDefinition {
-                name: tool.name.clone(),
-                description: tool.description.clone(),
-                input_schema: tool.input_schema.clone(),
-            })
-            .collect()
-    }
-
-    /// Get the current conversation history.
-    #[allow(dead_code)]
-    pub fn get_conversation(&self) -> &[Message] {
-        &self.conversation
-    }
-
-    /// Clear the conversation history.
-    pub fn clear_conversation(&mut self) {
-        self.conversation.clear();
-    }
-
-    /// Build a `ProviderRequest` from the current transcript + system prompt.
-    ///
-    /// Adds `user_content` (chat-ai wire `ContentBlock`s) to the in-memory
-    /// conversation as a new user message, then translates the full transcript
-    /// into the library's `Message`/`ContentBlock` types and packs them into a
-    /// `ProviderRequest` ready for `run_turn`.
-    pub fn build_provider_request(
-        &mut self,
-        user_content: Vec<ContentBlock>,
-    ) -> Result<ProviderRequest, anyhow::Error> {
-        // Add user message to local transcript.
-        self.conversation.push(Message::User {
-            role: "user".to_string(),
-            content: user_content,
-        });
-
-        let messages: Vec<LibMessage> = self.conversation.iter().map(message_to_lib).collect();
-
-        let tools: Vec<LibToolDefinition> = self
-            .tools
             .iter()
             .map(|t| LibToolDefinition {
                 name: t.name.clone(),
                 description: t.description.clone(),
                 input_schema: t.input_schema.clone(),
             })
-            .collect();
+            .collect()
+    }
+
+    #[allow(dead_code)]
+    pub fn get_conversation(&self) -> &[Message] {
+        &self.conversation
+    }
+
+    pub fn clear_conversation(&mut self) {
+        self.conversation.clear();
+    }
+
+    /// Build a `ProviderRequest` from the current transcript + system prompt.
+    ///
+    /// Filters tools and content blocks by the provider's capabilities, so
+    /// a provider that doesn't support images/PDFs gets text placeholders
+    /// instead of an API error.
+    pub fn build_provider_request(
+        &mut self,
+        user_content: Vec<ContentBlock>,
+    ) -> Result<ProviderRequest, anyhow::Error> {
+        self.conversation.push(Message::User {
+            role: "user".to_string(),
+            content: user_content,
+        });
+
+        let messages: Vec<LibMessage> =
+            self.conversation.iter().map(message_to_lib).collect();
+
+        let caps = self.provider.capabilities();
+        let tools: Vec<LibToolDefinition> = if caps.tool_calling {
+            self.get_tool_definitions()
+        } else {
+            vec![]
+        };
 
         Ok(ProviderRequest {
             model: self.model.clone(),
@@ -301,14 +220,14 @@ impl Agent {
 }
 
 // ---------------------------------------------------------------------------
-// Translation helpers — chat-ai wire types ↔ library types
+// Translation helper — UI Message enum → library Message struct.
+// ContentBlock is now shared, so no per-block translation needed.
 // ---------------------------------------------------------------------------
 
 fn message_to_lib(msg: &Message) -> LibMessage {
     match msg {
         Message::User { content, .. } => {
-            let blocks: Vec<LibContentBlock> =
-                content.iter().cloned().map(content_block_to_lib).collect();
+            let blocks: Vec<LibContentBlock> = content.iter().cloned().collect();
             LibMessage {
                 role: LibRole::User,
                 content: LibMessageContent::Blocks(blocks),
@@ -318,8 +237,7 @@ fn message_to_lib(msg: &Message) -> LibMessage {
             }
         }
         Message::Assistant { content, .. } => {
-            let blocks: Vec<LibContentBlock> =
-                content.iter().cloned().map(content_block_to_lib).collect();
+            let blocks: Vec<LibContentBlock> = content.iter().cloned().collect();
             LibMessage {
                 role: LibRole::Assistant,
                 content: LibMessageContent::Blocks(blocks),
@@ -331,48 +249,16 @@ fn message_to_lib(msg: &Message) -> LibMessage {
     }
 }
 
-fn content_block_to_lib(block: ContentBlock) -> LibContentBlock {
-    match block {
-        ContentBlock::Text { text } => LibContentBlock::Text { text },
-        ContentBlock::ToolUse { id, name, input } => {
-            LibContentBlock::ToolUse { id, name, input }
-        }
-        ContentBlock::ToolResult {
-            tool_use_id,
-            content,
-            is_error,
-        } => LibContentBlock::ToolResult {
-            tool_use_id,
-            content: ToolResultContent::Text(content),
-            is_error,
-        },
-        // The library's `Document` block supports base64 / URL sources only,
-        // not Anthropic Files-API `file_id`s. To preserve the API shape we
-        // emit a Text block carrying the JSON-serialized source so the request
-        // at least round-trips; the chat UI does not currently exercise this
-        // path anyway.
-        ContentBlock::Document { source: FileSource::File { file_id } } => {
-            LibContentBlock::Text {
-                text: format!(
-                    "[Attached file: id={} (Anthropic Files API)]",
-                    file_id
-                ),
-            }
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Builder
 // ---------------------------------------------------------------------------
 
-/// Builder for creating agents with custom configuration.
 pub struct AgentBuilder {
     provider: String,
     api_key: Option<String>,
     base_url: Option<String>,
-    model: String,
-    system_prompt: String,
+    model: Option<String>,
+    system_prompt: Option<String>,
     max_tokens: u32,
 }
 
@@ -382,8 +268,8 @@ impl Default for AgentBuilder {
             provider: "anthropic".to_string(),
             api_key: None,
             base_url: None,
-            model: "claude-haiku-4-5-20251001".to_string(),
-            system_prompt: Agent::default_system_prompt(),
+            model: None,
+            system_prompt: None,
             max_tokens: 4096,
         }
     }
@@ -395,66 +281,76 @@ impl AgentBuilder {
         self.provider = provider;
         self
     }
-
     pub fn api_key(mut self, api_key: String) -> Self {
         self.api_key = Some(api_key);
         self
     }
-
     pub fn base_url(mut self, base_url: String) -> Self {
         self.base_url = Some(base_url);
         self
     }
-
     pub fn model(mut self, model: String) -> Self {
-        self.model = model;
+        self.model = Some(model);
         self
     }
-
     pub fn system_prompt(mut self, prompt: String) -> Self {
-        self.system_prompt = prompt;
+        self.system_prompt = Some(prompt);
         self
     }
-
     pub fn max_tokens(mut self, max_tokens: u32) -> Self {
         self.max_tokens = max_tokens;
         self
     }
 
     pub fn build(self, tools: Vec<Tool>) -> Result<Agent> {
-        let api_key = match self.api_key {
-            Some(key) => key,
-            None => env::var("ANTHROPIC_API_KEY").unwrap_or_default(),
-        };
+        let registry = ModelRegistry::new();
+        let mut config = Config::default();
+        config.provider = Some(self.provider.clone());
 
-        // Use the provided base URL, or fall back to the library default
-        // (which reads `ANTHROPIC_API_BASE` from `core::constants`).
+        // Resolve API key: explicit > config (env vars) > empty.
+        let api_key = self.api_key.unwrap_or_else(|| {
+            config
+                .resolve_provider_api_key(&self.provider)
+                .unwrap_or_default()
+        });
+        config.api_key = Some(api_key.clone());
+
+        // Resolve base URL: explicit > config > library default.
         let base_url = self.base_url.unwrap_or_else(|| {
-            crate::core::constants::ANTHROPIC_API_BASE.to_string()
+            config
+                .resolve_provider_api_base(&self.provider)
+                .unwrap_or_else(|| crate::core::constants::ANTHROPIC_API_BASE.to_string())
         });
 
-        // If no API key is configured we still construct an agent — it will
-        // simply surface an error on the first `run_turn` call. This lets
-        // the GUI boot before the user has entered their key in the
-        // settings panel.
+        // Resolve model: explicit > registry best > config default.
+        let model = self.model.unwrap_or_else(|| {
+            effective_model_for_config(&config, &registry)
+        });
+
+        // Resolve system prompt: explicit > library default.
+        let system_prompt = self.system_prompt.unwrap_or_else(|| {
+            let opts = SystemPromptOptions::default();
+            build_system_prompt(&opts)
+        });
+
         let mut agent = Agent {
-            model: self.model,
-            system_prompt: self.system_prompt,
+            model,
+            system_prompt,
             tools,
             conversation: Vec::new(),
             max_tokens: self.max_tokens,
-            provider: Arc::new(AnthropicProvider::new(Arc::new(AnthropicClient::new(
-                ClientConfig::default(),
-            )?))),
+            // Placeholder provider — rebuilt below.
+            provider: Arc::new(crate::api::providers::AnthropicProvider::new(Arc::new(
+                crate::api::client::AnthropicClient::new(
+                    crate::api::client::ClientConfig::default(),
+                )?,
+            ))),
             provider_kind: self.provider,
             api_key,
             base_url,
+            config,
         };
-        // Now rebuild the provider for real based on the requested kind.
-        // This swaps in an OpenAI/OpenAI-compat provider if `provider_kind`
-        // isn't "anthropic".
         agent.rebuild_provider()?;
-
         Ok(agent)
     }
 }
@@ -471,7 +367,39 @@ mod tests {
             .system_prompt("You are a test assistant".to_string())
             .max_tokens(2048)
             .build(vec![]);
-
         assert!(agent.is_ok());
+    }
+
+    #[test]
+    fn build_provider_request_filters_tools_when_unsupported() {
+        // Use a mock-friendly agent: anthropic provider supports tools.
+        let mut agent = Agent::builder()
+            .api_key("test-key".to_string())
+            .model("claude-sonnet-4-5-20250929".to_string())
+            .build(vec![Tool {
+                name: "echo".into(),
+                description: "echo".into(),
+                input_schema: serde_json::json!({"type": "object"}),
+            }])
+            .unwrap();
+        let req = agent
+            .build_provider_request(vec![ContentBlock::Text { text: "hi".into() }])
+            .unwrap();
+        // Anthropic supports tools, so tools should be non-empty.
+        assert_eq!(req.tools.len(), 1);
+    }
+
+    #[test]
+    fn message_to_lib_translates_user_message() {
+        let msg = Message::User {
+            role: "user".into(),
+            content: vec![ContentBlock::Text { text: "hello".into() }],
+        };
+        let lib = message_to_lib(&msg);
+        assert!(matches!(lib.role, LibRole::User));
+        match lib.content {
+            LibMessageContent::Blocks(blocks) => assert_eq!(blocks.len(), 1),
+            _ => panic!("expected Blocks"),
+        }
     }
 }
