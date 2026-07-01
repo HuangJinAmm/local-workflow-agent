@@ -43,6 +43,9 @@ pub mod providers;
 // Model Registry (Phase 3).
 pub mod model_registry;
 
+// File uploads (Anthropic Files API).
+pub mod uploads;
+
 // Provider-aware error handling (Phase 6).
 pub mod error_handling;
 
@@ -78,6 +81,9 @@ pub use model_registry::{
     CostBreakdown, ExperimentalMode, InterleavedReasoning, Modality, ModelEntry, ModelRegistry,
     ModelStatus, ProviderEntry, ProviderOverride, effective_model_for_config,
 };
+
+// File uploads re-exports — Anthropic Files API.
+pub use uploads::{UploadError, UploadedFile, FileKind, get_mime_type, to_content_block, upload_anthropic};
 
 // Phase 6 re-exports — provider-aware error handling.
 pub use error_handling::{is_context_overflow, parse_error_response, RetryConfig};
