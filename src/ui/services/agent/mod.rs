@@ -27,7 +27,9 @@ pub use messages::{
 
 // Re-export core types — thin aliases over the library's own types so the
 // chat view does not need to know about `local_workflow_agent::core` paths.
-pub use types::{ContentBlock, FileSource, Message, Tool, ToolDefinition};
+pub use types::{Message, Tool};
+// `ContentBlock` and `ToolDefinition` come from `core::types` via `types.rs`.
+pub use crate::core::types::{ContentBlock, ToolDefinition};
 
 // Re-export the GUI permission handler. The GUI-side `PermissionRequest` is
 // re-exported as `GuiPermissionRequest` to avoid clashing with the library's

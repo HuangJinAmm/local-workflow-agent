@@ -1,23 +1,26 @@
 //! Core types for the agent module.
 //!
-//! These are the same wire-format types chat-ai uses internally — `Message`,
-//! `ContentBlock`, `FileSource`, `Tool`, `ToolDefinition`. They intentionally
-//! mirror the Anthropic Messages API JSON shape (so they serialise straight
-//! to the request body) and are kept separate from the library's richer
-//! `core::types::*` so the UI code ported from chat-ai needs no changes.
+//! `Message` and `Tool` are UI-specific data carriers (the `Message` enum
+//! shape differs from the library's `core::types::Message` struct, and `Tool`
+//! is a UI-side data bag while the library has a `tools::Tool` trait). They
+//! are kept here.
 //!
-//! `Agent` (in `client.rs`) is responsible for translating these into the
-//! library's `ProviderRequest` / `Message` / `ContentBlock` types before
-//! calling into `local_workflow_agent::api::AnthropicProvider`.
+//! The remaining types (`ContentBlock`, `ToolDefinition`) are re-exported
+//! from the library's `core::types` so there is a single source of truth —
+//! the translation layer in `client.rs` no longer needs to map between two
+//! parallel definitions.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+// Re-export library types — single source of truth.
+pub use crate::core::types::{ContentBlock, ToolDefinition};
 
 /// A tool that can be executed by the agent.
 ///
 /// Mirrors `chat-ai`'s `Tool` shape — just enough metadata for the API
 /// request. Execution is done through the library's `tools::Tool` trait
-/// from inside `Agent::chat_step`.
+/// from inside `run_turn`.
 #[derive(Clone)]
 pub struct Tool {
     pub name: String,
@@ -26,6 +29,11 @@ pub struct Tool {
 }
 
 /// Message in a conversation with the LLM.
+///
+/// UI enum form — the library's `core::types::Message` is a struct with a
+/// `MessageContent` enum; the UI keeps its own enum shape because the
+/// serialization path and chat-ai history differ. `client.rs::message_to_lib`
+/// handles the enum → struct translation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Message {
@@ -37,43 +45,4 @@ pub enum Message {
         role: String,
         content: Vec<ContentBlock>,
     },
-}
-
-/// Content block within a message.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum ContentBlock {
-    #[serde(rename = "text")]
-    Text { text: String },
-    #[serde(rename = "tool_use")]
-    ToolUse {
-        id: String,
-        name: String,
-        input: Value,
-    },
-    #[serde(rename = "tool_result")]
-    ToolResult {
-        tool_use_id: String,
-        content: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        is_error: Option<bool>,
-    },
-    #[serde(rename = "document")]
-    Document { source: FileSource },
-}
-
-/// File source for referencing uploaded files.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum FileSource {
-    #[serde(rename = "file")]
-    File { file_id: String },
-}
-
-/// Tool definition for the LLM API.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolDefinition {
-    pub name: String,
-    pub description: String,
-    pub input_schema: Value,
 }
