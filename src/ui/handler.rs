@@ -26,12 +26,14 @@ use crate::core::cost::CostTracker;
 use crate::core::file_history::FileHistory;
 use crate::core::permissions::PermissionHandler;
 use crate::tools::{all_tools, ToolContext, UserQuestionEvent};
+use crate::api::uploads;
+use crate::core::types::ContentBlock;
 use crate::ui::{
     ChatAI,
     permission_modal::PermissionRequest as ModalPermissionRequest,
     services::agent::{
-        Agent, AgentRequest, AgentResponse, ContentBlock, FileSource, GuiPermissionHandler,
-        GuiPermissionRequest, UiMessage, upload_file,
+        Agent, AgentRequest, AgentResponse, GuiPermissionHandler,
+        GuiPermissionRequest, UiMessage,
     },
 };
 
@@ -115,15 +117,15 @@ async fn run_agent_loop(
     while let Ok(request) = request_rx.recv().await {
         match request {
             AgentRequest::Chat { content, files } => {
-                // 1. Upload any attached files using the current API key.
+                // 1. Upload any attached files using the lib's uploads module.
                 let api_key = agent.api_key();
+                let caps = agent.capabilities();
                 let mut user_content = vec![ContentBlock::Text { text: content }];
                 for path in files {
-                    match upload_file(&api_key, &path).await {
-                        Ok(file_id) => {
-                            user_content.push(ContentBlock::Document {
-                                source: FileSource::File { file_id },
-                            });
+                    match uploads::upload_anthropic(&api_key, &path).await {
+                        Ok(up) => {
+                            let block = uploads::to_content_block(&up, &caps);
+                            user_content.push(block);
                         }
                         Err(e) => {
                             tracing::error!("Failed to upload file: {}", e);
