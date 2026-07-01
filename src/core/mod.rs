@@ -262,6 +262,21 @@ pub mod types {
         pub data: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub url: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub file_id: Option<String>,
+    }
+
+    impl ImageSource {
+        /// Construct a `file`-type source referencing an uploaded file id.
+        pub fn file(file_id: impl Into<String>) -> Self {
+            Self {
+                source_type: "file".to_string(),
+                media_type: None,
+                data: None,
+                url: None,
+                file_id: Some(file_id.into()),
+            }
+        }
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -274,6 +289,21 @@ pub mod types {
         pub data: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub url: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub file_id: Option<String>,
+    }
+
+    impl DocumentSource {
+        /// Construct a `file`-type source referencing an uploaded file id.
+        pub fn file(file_id: impl Into<String>) -> Self {
+            Self {
+                source_type: "file".to_string(),
+                media_type: None,
+                data: None,
+                url: None,
+                file_id: Some(file_id.into()),
+            }
+        }
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -4634,4 +4664,72 @@ pub mod feature_gates {
 /// Sample a spinner verb (stub — full implementation was removed).
 pub fn sample_spinner_verb() -> &'static str {
     "working"
+}
+
+#[cfg(test)]
+mod lib_dedup_tests {
+    use super::*;
+    use serde_json;
+
+    #[test]
+    fn image_source_file_serializes_to_anthropic_wire_format() {
+        let src = ImageSource {
+            source_type: "file".to_string(),
+            media_type: None,
+            data: None,
+            url: None,
+            file_id: Some("file-abc-123".to_string()),
+        };
+        let json = serde_json::to_value(&src).unwrap();
+        assert_eq!(json["type"], "file");
+        assert_eq!(json["file_id"], "file-abc-123");
+        assert!(json.get("media_type").is_none());
+        assert!(json.get("data").is_none());
+        assert!(json.get("url").is_none());
+    }
+
+    #[test]
+    fn document_source_file_serializes_to_anthropic_wire_format() {
+        let src = DocumentSource {
+            source_type: "file".to_string(),
+            media_type: None,
+            data: None,
+            url: None,
+            file_id: Some("file-xyz-456".to_string()),
+        };
+        let json = serde_json::to_value(&src).unwrap();
+        assert_eq!(json["type"], "file");
+        assert_eq!(json["file_id"], "file-xyz-456");
+    }
+
+    #[test]
+    fn image_source_file_roundtrip() {
+        let src = ImageSource {
+            source_type: "file".to_string(),
+            media_type: None,
+            data: None,
+            url: None,
+            file_id: Some("file-rt".to_string()),
+        };
+        let json = serde_json::to_string(&src).unwrap();
+        let back: ImageSource = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.source_type, "file");
+        assert_eq!(back.file_id.as_deref(), Some("file-rt"));
+    }
+
+    #[test]
+    fn image_source_base64_unchanged_after_adding_file_id() {
+        let src = ImageSource {
+            source_type: "base64".to_string(),
+            media_type: Some("image/png".to_string()),
+            data: Some("iVBORw0KGgo=".to_string()),
+            url: None,
+            file_id: None,
+        };
+        let json = serde_json::to_value(&src).unwrap();
+        assert_eq!(json["type"], "base64");
+        assert_eq!(json["media_type"], "image/png");
+        assert_eq!(json["data"], "iVBORw0KGgo=");
+        assert!(json.get("file_id").is_none());
+    }
 }
