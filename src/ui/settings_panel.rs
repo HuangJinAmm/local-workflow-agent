@@ -24,7 +24,7 @@ use gpui_component::{
 use std::sync::Arc;
 
 use crate::ui::settings::Settings;
-use crate::ui::services::agent::PROVIDER_PRESETS;
+use crate::api::model_registry::ModelRegistry;
 
 /// A single option in the provider dropdown.
 ///
@@ -69,17 +69,19 @@ pub struct SettingsPanel {
 impl SettingsPanel {
     /// Construct a new settings panel pre-filled with `settings`.
     pub fn new(settings: &Settings, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        // Build provider dropdown items from the preset list.
-        let items: Vec<ProviderItem> = PROVIDER_PRESETS
+        // Build provider dropdown from the library's bundled model registry.
+        let registry = ModelRegistry::new();
+        let providers = registry.list_providers();
+        let items: Vec<ProviderItem> = providers
             .iter()
-            .map(|(id, label)| ProviderItem {
-                id: (*id).into(),
-                label: (*label).into(),
+            .map(|p| ProviderItem {
+                id: p.id.to_string().into(),
+                label: p.name.clone().into(),
             })
             .collect();
-        let selected_index = PROVIDER_PRESETS
+        let selected_index = providers
             .iter()
-            .position(|(id, _)| *id == settings.provider)
+            .position(|p| &*p.id == settings.provider.as_str())
             .map(|i| IndexPath::default().row(i));
         let provider_select =
             cx.new(|cx| SelectState::new(items, selected_index, window, cx));
