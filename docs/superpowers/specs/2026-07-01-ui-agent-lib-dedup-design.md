@@ -41,7 +41,7 @@
 | System prompt | 3 行硬编码字符串 | `core::system_prompt::build_system_prompt(opts)` |
 | Model 默认值 | `claude-haiku-4-5-20251001` 魔法字符串 | `effective_model_for_config(config, registry)` |
 | File upload | `files.rs` 直接调 Anthropic HTTP | 下沉到 `api::uploads` 新模块，UI 仅调用 |
-| `FileSource::File { file_id }` | UI 独有，lib 无对应 | 在 `core::types::DocumentSource` 和 `ImageSource` 新增 `File` 变体 |
+| `FileSource::File { file_id }` | UI 独有，lib 无对应 | 在 `core::types::DocumentSource` 和 `ImageSource` 新增 `file_id: Option<String>` 字段 |
 
 ### 2.2 保留不动
 
@@ -82,9 +82,9 @@ pub async fn upload_anthropic(api_key: &str, path: &Path) -> Result<UploadedFile
 
 /// 按 provider 能力决定如何把 UploadedFile 嵌入对话。
 /// - Anthropic + caps.pdf_input=true 且 mime 是 application/pdf
-///   → ContentBlock::Document { source: DocumentSource::File { file_id } }
+///   → ContentBlock::Document { source: DocumentSource { source_type: "file", file_id: Some(...), .. } }
 /// - caps.image_input=true 且 mime 是 image/*
-///   → ContentBlock::Image { source: ImageSource::File { file_id } }
+///   → ContentBlock::Image { source: ImageSource { source_type: "file", file_id: Some(...), .. } }
 /// - 不支持 → ContentBlock::Text { text: "[附件: <filename>]" }
 pub fn to_content_block(up: &UploadedFile, caps: &ProviderCapabilities) -> ContentBlock;
 
@@ -131,33 +131,46 @@ pub fn get_mime_type(path: &Path) -> &'static str;
 
 ## 4. lib 类型扩展：`core::types`
 
-在 `src/core/mod.rs` 中给 `DocumentSource` 和 `ImageSource` 新增 `File` 变体：
+`ImageSource` 和 `DocumentSource` 当前是 flat struct（`source_type: String` + 可选 `media_type`/`data`/`url`），不是 enum。在 `src/core/mod.rs` 中给两者新增 `file_id` 字段：
 
 ```rust
-// core/mod.rs:255 附近
+// core/mod.rs:255-265  ImageSource
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum ImageSource {
-    Base64 { media_type: String, data: String },
-    Url { url: String },
-    File { file_id: String },  // ← 新增
+pub struct ImageSource {
+    #[serde(rename = "type")]
+    pub source_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub media_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_id: Option<String>,  // ← 新增
 }
 
-// core/mod.rs:268 附近
+// core/mod.rs:267-277  DocumentSource
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum DocumentSource {
-    Base64 { media_type: String, data: String },
-    Url { url: String },
-    File { file_id: String },  // ← 新增
+pub struct DocumentSource {
+    #[serde(rename = "type")]
+    pub source_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub media_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_id: Option<String>,  // ← 新增
 }
 ```
 
 ### 4.1 序列化验证
 
-- `#[serde(tag = "type")]` 下，新增 `File { file_id }` 会序列化为 `{"type":"file","file_id":"..."}`，与 Anthropic Files-API wire 格式一致
-- 现有 `Base64`/`Url` 变体的序列化路径不受影响（serde enum 只在匹配变体时序列化对应字段）
+- 当 `source_type = "file"` 且 `file_id = Some("...")` 时，序列化为 `{"type":"file","file_id":"..."}`，与 Anthropic Files-API wire 格式一致
+- 现有 `base64`/`url` 路径不受影响（`file_id` 为 `None` 时 `skip_serializing_if` 跳过）
 - 需要新增序列化单元测试确认 wire 格式
+- 需提供 `ImageSource::file(file_id)` / `DocumentSource::file(file_id)` 构造助手
 
 ---
 
@@ -249,8 +262,8 @@ pub fn build_provider_request(&mut self, user_content: Vec<ContentBlock>) -> Res
 
 - `get_mime_type` 全扩展名覆盖（含兜底 `octet-stream`）
 - `to_content_block` 在不同 caps 下的分支：
-  - image_input=true + image mime → `ContentBlock::Image { source: ImageSource::File }`
-  - pdf_input=true + pdf mime → `ContentBlock::Document { source: DocumentSource::File }`
+  - image_input=true + image mime → `ContentBlock::Image { source: ImageSource { source_type: "file", file_id: Some(...), .. } }`
+  - pdf_input=true + pdf mime → `ContentBlock::Document { source: DocumentSource { source_type: "file", file_id: Some(...), .. } }`
   - image_input=false → `ContentBlock::Text { "[Image not supported]" }`
   - pdf_input=false → `ContentBlock::Text { "[PDF not supported]" }`
   - 不支持的 mime → `ContentBlock::Text { "[附件: <filename>]" }`
@@ -258,8 +271,8 @@ pub fn build_provider_request(&mut self, user_content: Vec<ContentBlock>) -> Res
 
 ### 9.2 `core::types` 序列化测试
 
-- `DocumentSource::File { file_id }` 序列化为 `{"type":"file","file_id":"..."}` 确认 wire 格式
-- `ImageSource::File { file_id }` 同上
+- `DocumentSource { source_type: "file", file_id: Some("..."), .. }` 序列化为 `{"type":"file","file_id":"..."}` 确认 wire 格式
+- `ImageSource { source_type: "file", file_id: Some("..."), .. }` 同上
 - 反序列化往返测试
 
 ### 9.3 `client.rs` 集成测试
