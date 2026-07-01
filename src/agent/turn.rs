@@ -7,11 +7,16 @@ use futures::{FutureExt, StreamExt};
 use tokio_util::sync::CancellationToken;
 
 use crate::api::provider::LlmProvider;
-use crate::api::provider_types::{ProviderRequest, StopReason, StreamEvent};
+use crate::api::provider_types::{ProviderRequest, StopReason, StreamEvent, SystemPrompt};
 use crate::core::error::ClaudeError;
 use crate::core::permissions::{PermissionDecision, PermissionRequest};
 use crate::core::types::{ContentBlock, Message, ToolResultContent, UsageInfo};
 use crate::tools::{Tool, ToolContext};
+
+/// Maximum number of chars of the system prompt to dump verbatim into the
+/// log. Longer prompts are truncated with a length note so the log stays
+/// readable.
+const SYSTEM_PROMPT_LOG_PREVIEW: usize = 2000;
 
 /// Cap on consecutive tool-use rounds to prevent infinite loops.
 pub const MAX_TOOL_ROUNDS: usize = 16;
@@ -54,13 +59,15 @@ pub type TurnCancel = CancellationToken;
 /// on normal completion (including cancellation), `Err` on hard failure.
 pub async fn run_turn(
     provider: Arc<dyn LlmProvider>,
-    _session_id: String,
+    session_id: String,
     mut request: ProviderRequest,
     tools: Arc<Vec<Box<dyn Tool>>>,
     tool_ctx: Arc<ToolContext>,
     sink: TurnSink,
     cancel: TurnCancel,
 ) -> Result<(), ClaudeError> {
+    log_turn_init(&session_id, &request, &tools);
+
     for _round in 1..=MAX_TOOL_ROUNDS {
         // Cancellation check point 1: round start.
         if cancel.is_cancelled() {
@@ -271,6 +278,64 @@ async fn fail(sink: &TurnSink, err: ClaudeError) -> ClaudeError {
     let display = err.to_string();
     let _ = sink.send(TurnEvent::Failed { error: err }).await;
     ClaudeError::Other(display)
+}
+
+/// Flatten a `SystemPrompt` into a single `String` for logging.
+fn system_prompt_text(sp: &Option<SystemPrompt>) -> String {
+    match sp {
+        None => String::new(),
+        Some(SystemPrompt::Text(s)) => s.clone(),
+        Some(SystemPrompt::Blocks(blocks)) => blocks
+            .iter()
+            .map(|b| b.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    }
+}
+
+/// Log the turn's initialization info: session id, model, system prompt,
+/// available tools, and request shape. Called once at the top of `run_turn`
+/// so both CLI and GUI paths emit the same diagnostic.
+fn log_turn_init(session_id: &str, request: &ProviderRequest, tools: &[Box<dyn Tool>]) {
+    let sp_text = system_prompt_text(&request.system_prompt);
+    let sp_char_count = sp_text.chars().count();
+    let sp_preview = if sp_char_count > SYSTEM_PROMPT_LOG_PREVIEW {
+        format!(
+            "{}...(truncated, {} chars total)",
+            sp_text.chars().take(SYSTEM_PROMPT_LOG_PREVIEW).collect::<String>(),
+            sp_char_count
+        )
+    } else {
+        sp_text
+    };
+
+    tracing::info!(
+        "run_turn init | session={} model={} messages={} tools_available={} tools_in_request={} max_tokens={} temp={:?}",
+        session_id,
+        request.model,
+        request.messages.len(),
+        tools.len(),
+        request.tools.len(),
+        request.max_tokens,
+        request.temperature,
+    );
+
+    // System prompt — full content (truncated for readability).
+    if sp_preview.is_empty() {
+        tracing::info!("run_turn system_prompt: (none)");
+    } else {
+        tracing::info!("run_turn system_prompt ({} chars):\n{}", sp_char_count, sp_preview);
+    }
+
+    // Available tools — name, permission level, description.
+    for t in tools.iter() {
+        tracing::info!(
+            "run_turn tool: {:<16} [{:?}] {}",
+            t.name(),
+            t.permission_level(),
+            t.description(),
+        );
+    }
 }
 
 /// Execute a single tool call. Returns `Some((text, is_error))` describing the

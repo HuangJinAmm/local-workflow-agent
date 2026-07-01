@@ -6,7 +6,7 @@ edition = "2024"
 [features]
 gui = ["dep:gpui", "dep:gpui-component", "dep:gpui-component-assets", "dep:rfd", "dep:rust-embed"]
 computer-use = []
-default = []
+default = ["gui"]
 
 [dependencies]
 # Async runtime
