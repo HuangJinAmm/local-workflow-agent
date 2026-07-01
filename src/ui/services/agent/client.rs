@@ -20,9 +20,8 @@ use crate::api::model_registry::{effective_model_for_config, ModelRegistry};
 use crate::core::config::Config;
 use crate::core::system_prompt::{build_system_prompt, SystemPromptOptions};
 use crate::core::types::{
-    ContentBlock as LibContentBlock, DocumentSource, ImageSource, Message as LibMessage,
+    ContentBlock as LibContentBlock, Message as LibMessage,
     MessageContent as LibMessageContent, Role as LibRole, ToolDefinition as LibToolDefinition,
-    ToolResultContent,
 };
 
 use super::types::{ContentBlock, Message, Tool};

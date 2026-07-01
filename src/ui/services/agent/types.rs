@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 // Re-export library types — single source of truth.
-pub use crate::core::types::{ContentBlock, ToolDefinition};
+pub use crate::core::types::ContentBlock;
 
 /// A tool that can be executed by the agent.
 ///
