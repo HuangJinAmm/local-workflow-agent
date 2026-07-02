@@ -71,7 +71,7 @@ pub async fn handle_outgoing(
     };
 
     // Spawn the agent loop on the Tokio runtime so that reqwest/tokio calls
-    // inside `run_turn` / `upload_file` have a reactor. `runtime`
+    // inside `run_turn` / `uploads::upload_anthropic` have a reactor. `runtime`
     // stays alive in this frame until the spawned future completes, then is
     // dropped to shut the reactor down.
     let join = runtime
