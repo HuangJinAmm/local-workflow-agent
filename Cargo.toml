@@ -50,7 +50,6 @@ indexmap = { version = "2", features = ["serde"] }
 bytes = "1"
 base64 = "0.22"
 sha2 = "0.10"
-hex = "0.4"
 url = "2"
 mime = "0.3"
 mime_guess = "2"
