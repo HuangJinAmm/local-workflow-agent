@@ -772,6 +772,7 @@ pub fn should_compact(tokens_used: u64, context_limit: u64) -> bool {
 /// Context-collapse is a last-resort measure: it produces an ultra-short
 /// summary and keeps only the most recent user turn so that the next API call
 /// can succeed even when the conversation is severely over-limit.
+#[allow(dead_code)]
 pub fn should_context_collapse(tokens_used: u64, context_limit: u64) -> bool {
     if context_limit == 0 {
         return false;
@@ -868,11 +869,9 @@ fn strip_images(messages: Vec<crate::core::types::Message>) -> Vec<crate::core::
 /// Run reactive compact: summarise the oldest messages and return a trimmed
 /// conversation.
 ///
-/// Feature gate: only call this when
-/// `crate::core::feature_gates::is_feature_enabled("reactive_compact")` is true.
-///
 /// The `cancel` token is checked before the API call so the user can abort
 /// a long-running compact.
+#[allow(dead_code)]
 pub async fn reactive_compact(
     messages: Vec<crate::core::types::Message>,
     client: &crate::api::AnthropicClient,
@@ -962,6 +961,7 @@ pub async fn reactive_compact(
 /// Use only when `should_context_collapse()` returns `true` — i.e. the
 /// context is at ≥ 97 % capacity and a regular reactive compact is unlikely
 /// to free enough space.
+#[allow(dead_code)]
 pub async fn context_collapse(
     messages: Vec<crate::core::types::Message>,
     client: &crate::api::AnthropicClient,

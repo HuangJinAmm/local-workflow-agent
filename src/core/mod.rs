@@ -4628,44 +4628,6 @@ pub mod effort {
     }
 }
 
-/// Snapshot/undo system stub (full implementation was removed).
-pub mod snapshot {
-    use std::path::Path;
-    use std::sync::Arc;
-
-    #[derive(Debug, Clone, Default)]
-    pub struct ShadowSnapshot;
-
-    #[derive(Debug, Clone, Default)]
-    pub struct FilePatch;
-
-    pub fn get_or_create(_root: &Path) -> Option<Arc<ShadowSnapshot>> {
-        None
-    }
-
-    impl ShadowSnapshot {
-        pub async fn track(&self) -> Option<String> {
-            None
-        }
-
-        pub async fn patch(&self, _hash: &str) -> FilePatch {
-            FilePatch
-        }
-    }
-}
-
-/// Feature gates stub.
-pub mod feature_gates {
-    pub fn is_feature_enabled(_name: &str) -> bool {
-        false
-    }
-}
-
-/// Sample a spinner verb (stub — full implementation was removed).
-pub fn sample_spinner_verb() -> &'static str {
-    "working"
-}
-
 #[cfg(test)]
 mod lib_dedup_tests {
     use super::*;

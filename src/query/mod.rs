@@ -16,9 +16,9 @@ pub use command_queue::{CommandPriority, CommandQueue, QueuedCommand, drain_comm
 pub use compact::{
     AutoCompactState, CompactResult, CompactTrigger, MicroCompactConfig, MessageGroup, TokenWarningState,
     auto_compact_if_needed, calculate_messages_to_keep_index, calculate_token_warning_state,
-    compact_conversation, context_collapse, context_window_for_model, format_compact_summary,
+    compact_conversation, context_window_for_model, format_compact_summary,
     get_compact_prompt, group_messages_for_compact, micro_compact_if_needed,
-    reactive_compact, should_auto_compact, should_compact, should_context_collapse, snip_compact,
+    should_auto_compact, should_compact, snip_compact,
 };
 pub use session_memory::{
     ExtractedMemory, MemoryCategory, SessionMemoryExtractor, SessionMemoryState,
@@ -727,10 +727,6 @@ pub async fn run_query_loop(
         .and_then(|a| a.max_turns)
         .unwrap_or(config.max_turns);
 
-    // Shadow-git snapshot: stubbed (full implementation was removed).
-    let shadow_snap: Option<std::sync::Arc<crate::core::snapshot::ShadowSnapshot>> = None;
-    let initial_snapshot: Option<String> = None;
-
     loop {
         turn += 1;
         tool_ctx
@@ -1031,8 +1027,7 @@ pub async fn run_query_loop(
 
                     // Notify TUI that we're calling the provider using a random spinner verb
                     if let Some(ref tx) = event_tx {
-                        let verb = crate::core::sample_spinner_verb();
-                        let _ = tx.send(QueryEvent::Status(format!("✳ {}…", verb)));
+                        let _ = tx.send(QueryEvent::Status("✳ working…".to_string()));
                     }
 
                     // Build ProviderRequest from the already-assembled request data.
@@ -1358,9 +1353,6 @@ pub async fn run_query_loop(
                     }
 
                     // Attach snapshot patch covering all file changes this query.
-                    // (snapshot patch functionality was removed)
-                    let _ = (&shadow_snap, &initial_snapshot);
-
                     return QueryOutcome::EndTurn {
                         message: assistant_msg,
                         usage,
@@ -1579,75 +1571,7 @@ pub async fn run_query_loop(
 
         // Auto-compact: if context is near-full, summarise older messages now
         // (before the next turn's API call would fail with prompt-too-long).
-        //
-        // Reactive compact (T1-1): when the CLAUDE_REACTIVE_COMPACT feature gate
-        // is enabled, we replace the proactive auto-compact path with reactive
-        // compact / context-collapse instead. This fires on every streaming turn
-        // so it can act before a prompt-too-long error is returned by the API.
-        //
-        // Feature gate check: CLAURST_FEATURE_REACTIVE_COMPACT=1
-        let reactive_compact_enabled =
-            crate::core::feature_gates::is_feature_enabled("reactive_compact");
-
-        if reactive_compact_enabled {
-            // Reactive path: emergency collapse takes priority over normal compact.
-            let context_limit = compact::context_window_for_model(&config.model);
-            if compact::should_context_collapse(usage.input_tokens, context_limit) {
-                if let Some(ref tx) = event_tx {
-                    let _ = tx.send(QueryEvent::Status(
-                        "Compacting context... (emergency collapse)".to_string(),
-                    ));
-                }
-                match compact::context_collapse(
-                    std::mem::take(messages),
-                    client,
-                    config,
-                )
-                .await
-                {
-                    Ok(result) => {
-                        *messages = result.messages;
-                        info!(
-                            tokens_freed = result.tokens_freed,
-                            "Context-collapse complete"
-                        );
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "Context-collapse failed");
-                        // Put messages back on failure (mem::take drained them).
-                        // We can't recover them here — re-run auto-compact as fallback.
-                    }
-                }
-            } else if compact::should_compact(usage.input_tokens, context_limit) {
-                if let Some(ref tx) = event_tx {
-                    let _ = tx.send(QueryEvent::Status("Compacting context...".to_string()));
-                }
-                match compact::reactive_compact(
-                    std::mem::take(messages),
-                    client,
-                    config,
-                    cancel_token.clone(),
-                    &[],
-                )
-                .await
-                {
-                    Ok(result) => {
-                        *messages = result.messages;
-                        info!(
-                            tokens_freed = result.tokens_freed,
-                            "Reactive compact complete"
-                        );
-                    }
-                    Err(crate::core::error::ClaudeError::Cancelled) => {
-                        warn!("Reactive compact was cancelled");
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "Reactive compact failed");
-                    }
-                }
-            }
-        } else if stop == "end_turn" || stop == "tool_use" {
-            // Proactive auto-compact (original path, used when reactive compact is off).
+        if stop == "end_turn" || stop == "tool_use" {
             if let Some(new_msgs) = compact::auto_compact_if_needed(
                 client,
                 messages,
@@ -1764,10 +1688,6 @@ pub async fn run_query_loop(
                 }
 
                 // AutoDream consolidation was removed — skip.
-
-                // Attach snapshot patch covering all file changes this query.
-                // (snapshot patch functionality was removed)
-                let _ = (&shadow_snap, &initial_snapshot);
 
                 return QueryOutcome::EndTurn {
                     message: assistant_msg,
@@ -1975,9 +1895,6 @@ pub async fn run_query_loop(
                     &tool_ctx.config,
                     tool_ctx.working_dir.clone(),
                 );
-                if let (Some(_snap), Some(_hash)) = (&shadow_snap, &initial_snapshot) {
-                    // snapshot patch functionality was removed
-                }
                 return QueryOutcome::EndTurn {
                     message: assistant_msg,
                     usage,
@@ -1991,9 +1908,6 @@ pub async fn run_query_loop(
                     &tool_ctx.config,
                     tool_ctx.working_dir.clone(),
                 );
-                if let (Some(_snap), Some(_hash)) = (&shadow_snap, &initial_snapshot) {
-                    // snapshot patch functionality was removed
-                }
                 return QueryOutcome::EndTurn {
                     message: assistant_msg,
                     usage,
