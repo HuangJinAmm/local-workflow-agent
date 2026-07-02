@@ -87,10 +87,6 @@ async fn run_agent_loop(
     response_tx: Sender<AgentResponse>,
 ) {
     let mut agent = match Agent::builder()
-        .system_prompt(
-            "You are a helpful, succint assistant. Please respond only in markdown and no emojis."
-                .to_string(),
-        )
         .max_tokens(4096)
         .build(vec![])
     {

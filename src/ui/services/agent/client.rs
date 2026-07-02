@@ -182,7 +182,7 @@ impl Agent {
     ///
     /// Filters tools and content blocks by the provider's capabilities, so
     /// a provider that doesn't support images/PDFs gets text placeholders
-    /// instead of an API error.
+    /// instead of an API error. Mirrors `query/mod.rs:1043-1081`.
     pub fn build_provider_request(
         &mut self,
         user_content: Vec<ContentBlock>,
@@ -192,15 +192,40 @@ impl Agent {
             content: user_content,
         });
 
-        let messages: Vec<LibMessage> =
-            self.conversation.iter().map(message_to_lib).collect();
-
         let caps = self.provider.capabilities();
         let tools: Vec<LibToolDefinition> = if caps.tool_calling {
             self.get_tool_definitions()
         } else {
             vec![]
         };
+
+        // Filter unsupported modalities — replace Image/Document blocks with
+        // placeholder text when the provider doesn't support them.
+        let messages: Vec<LibMessage> = self
+            .conversation
+            .iter()
+            .map(|msg| {
+                let mut lib_msg = message_to_lib(msg);
+                if let LibMessageContent::Blocks(ref mut blocks) = lib_msg.content {
+                    for block in blocks.iter_mut() {
+                        match block {
+                            LibContentBlock::Image { .. } if !caps.image_input => {
+                                *block = LibContentBlock::Text {
+                                    text: "[Image not supported by this model]".to_string(),
+                                };
+                            }
+                            LibContentBlock::Document { .. } if !caps.pdf_input => {
+                                *block = LibContentBlock::Text {
+                                    text: "[PDF not supported by this model]".to_string(),
+                                };
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                lib_msg
+            })
+            .collect();
 
         Ok(ProviderRequest {
             model: self.model.clone(),
