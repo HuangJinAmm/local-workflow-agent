@@ -159,12 +159,6 @@ impl Tool for NotebookEditTool {
                 if let Err(e) = tokio::fs::write(&path, &updated).await {
                     return ToolResult::error(format!("Failed to write notebook: {}", e));
                 }
-                ctx.record_file_change(
-                    path.clone(),
-                    content.as_bytes(),
-                    updated.as_bytes(),
-                    self.name(),
-                ).await;
                 ToolResult::success(msg)
             }
             Err(e) => ToolResult::error(e),

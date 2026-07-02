@@ -445,9 +445,6 @@ mod tests {
             cost_tracker: crate::core::cost::CostTracker::new(),
             session_id: "test".to_string(),
             current_turn: Arc::new(AtomicUsize::new(0)),
-            file_history: Arc::new(parking_lot::Mutex::new(
-                crate::core::file_history::FileHistory::new(),
-            )),
             lsp_manager: None,
             non_interactive: true,
             mcp_manager: None,

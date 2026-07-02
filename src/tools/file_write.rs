@@ -78,22 +78,7 @@ impl Tool for FileWriteTool {
             }
         }
 
-        let existed = path.exists();
-        let before_content = if existed {
-            match tokio::fs::read(&path).await {
-                Ok(bytes) => bytes,
-                Err(e) => {
-                    return ToolResult::error(format!(
-                        "Failed to read existing file {}: {}",
-                        path.display(),
-                        e
-                    ))
-                }
-            }
-        } else {
-            Vec::new()
-        };
-        let is_new = !existed;
+        let is_new = !path.exists();
 
         // Write the file
         if let Err(e) = super::write_atomic(&path, params.content.as_bytes()).await {
@@ -103,14 +88,6 @@ impl Tool for FileWriteTool {
                 e
             ));
         }
-
-        ctx.record_file_change(
-            path.clone(),
-            &before_content,
-            params.content.as_bytes(),
-            self.name(),
-        )
-        .await;
 
         // Run any configured formatter for this file type.
         super::try_format_file(&path.to_string_lossy(), ctx).await;

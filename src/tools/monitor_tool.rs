@@ -259,9 +259,6 @@ mod tests {
             permission_handler: handler,
             cost_tracker: crate::core::cost::CostTracker::new(),
             session_id: "test-monitor".to_string(),
-            file_history: Arc::new(parking_lot::Mutex::new(
-                crate::core::file_history::FileHistory::new(),
-            )),
             lsp_manager: None,
             current_turn: Arc::new(AtomicUsize::new(0)),
             non_interactive: true,

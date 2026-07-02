@@ -136,14 +136,6 @@ impl Tool for FileEditTool {
             return ToolResult::error(format!("Failed to write file {}: {}", path.display(), e));
         }
 
-        ctx.record_file_change(
-            path.clone(),
-            content.as_bytes(),
-            new_content.as_bytes(),
-            self.name(),
-        )
-        .await;
-
         // Run any configured formatter for this file type.
         super::try_format_file(&path.to_string_lossy(), ctx).await;
 

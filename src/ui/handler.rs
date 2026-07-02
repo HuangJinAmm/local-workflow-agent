@@ -23,7 +23,6 @@ use tokio_util::sync::CancellationToken;
 use crate::agent::{run_turn, TurnEvent};
 use crate::core::config::{Config, PermissionMode};
 use crate::core::cost::CostTracker;
-use crate::core::file_history::FileHistory;
 use crate::core::permissions::PermissionHandler;
 use crate::tools::{all_tools, ToolContext, UserQuestionEvent};
 use crate::api::uploads;
@@ -174,9 +173,6 @@ async fn run_agent_loop(
                     cost_tracker: CostTracker::new(),
                     session_id: session_id.clone(),
                     current_turn: Arc::new(AtomicUsize::new(0)),
-                    file_history: Arc::new(parking_lot::Mutex::new(
-                        FileHistory::new(),
-                    )),
                     lsp_manager: None,
                     non_interactive: false,
                     mcp_manager: None,

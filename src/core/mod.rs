@@ -40,8 +40,6 @@ pub mod mcp_templates;
 // LSP server integration.
 pub mod lsp;
 
-pub mod file_history;
-
 
 
 pub mod goal;

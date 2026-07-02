@@ -244,7 +244,6 @@ pub struct ToolContext {
     pub cost_tracker: Arc<CostTracker>,
     pub session_id: String,
     pub current_turn: Arc<AtomicUsize>,
-    pub file_history: Arc<parking_lot::Mutex<crate::core::file_history::FileHistory>>,
     pub lsp_manager: Option<Arc<crate::core::lsp::LspManager>>,
     /// If true, suppress interactive prompts (batch / CI mode).
     pub non_interactive: bool,
@@ -275,17 +274,6 @@ impl ToolContext {
         } else {
             self.working_dir.join(p)
         }
-    }
-
-    /// Record a file change (stub — file history tracking was removed).
-    pub async fn record_file_change(
-        &self,
-        _path: std::path::PathBuf,
-        _before: impl AsRef<[u8]>,
-        _after: impl AsRef<[u8]>,
-        _tool_name: &str,
-    ) {
-        // No-op: file history tracking was removed during cleanup.
     }
 
     fn permission_allowed_roots(&self) -> Vec<PathBuf> {
@@ -556,9 +544,6 @@ mod tests {
             current_turn: Arc::new(AtomicUsize::new(0)),
             non_interactive: true,
             mcp_manager: None,
-            file_history: Arc::new(parking_lot::Mutex::new(
-                crate::core::file_history::FileHistory::new(),
-            )),
             lsp_manager: None,
             config: Config::default(),
             managed_agent_config: None,

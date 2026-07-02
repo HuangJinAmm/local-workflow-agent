@@ -419,7 +419,7 @@ impl Tool for ApplyPatchTool {
         // Write all modified files
         // ----------------------------------------------------------------
 
-        for (path, original_bytes, new_content) in &to_write {
+        for (path, _original_bytes, new_content) in &to_write {
             if let Err(e) = tokio::fs::write(path, new_content).await {
                 return ToolResult::error(format!(
                     "Failed to write {}: {}",
@@ -427,13 +427,6 @@ impl Tool for ApplyPatchTool {
                     e
                 ));
             }
-            ctx.record_file_change(
-                path.clone(),
-                original_bytes,
-                new_content.as_bytes(),
-                self.name(),
-            )
-            .await;
         }
 
         ToolResult::success(format!(
