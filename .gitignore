@@ -1,2 +1,5 @@
 /target
 cargo.lock
+/.env
+/graphify-out
+/.codegraph
