@@ -7,7 +7,5 @@
 //! cancellation, or `MAX_TOOL_ROUNDS` is reached.
 
 mod turn;
-mod mock_provider;
 
-pub use mock_provider::MockProvider;
 pub use turn::{run_turn, TurnCancel, TurnEvent, TurnSink, MAX_TOOL_ROUNDS};
